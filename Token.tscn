@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://1ijlrhgnwh1j"]
+
+[ext_resource type="Script" uid="uid://b30wd8vm7sr4l" path="res://Token.cs" id="1_s1uwx"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_p7d1o"]
+radius = 24.0
+
+[node name="Token" type="Area2D" unique_id=2070263718]
+script = ExtResource("1_s1uwx")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=1739116084]
+shape = SubResource("CircleShape2D_p7d1o")

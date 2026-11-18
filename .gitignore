@@ -1,0 +1,30 @@
+# Godot 4+
+.godot/
+/android/
+
+# .NET / C#
+.mono/
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Exports and builds
+/export/
+/builds/
+*.apk
+*.aab
+*.idsig
+*.pck
+
+# Secrets: never commit signing keys or saved export passwords
+*.keystore
+*.jks
+export_credentials.cfg
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
