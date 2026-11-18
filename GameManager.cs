@@ -19,7 +19,8 @@ public partial class GameManager : Node
     // Bringing a token all the way home gives another turn
     [Export] public bool ExtraTurnOnHome = true;
 
-    // Rolling three sixes in a row voids the third six and loses the turn
+    // Three sixes in a row: the third is void, the turn is lost, and the moves
+    // made with the first two sixes are undone
     [Export] public bool ThreeSixesLoseTurn = true;
 
     // Chance of a 6 relative to each other face (1.0 = fair die, 2.0 = about 29% sixes)
@@ -36,11 +37,16 @@ public partial class GameManager : Node
 
     private readonly Dictionary<string, DiceButton> _dice = new();
     private readonly Dictionary<string, Label> _tags = new();
+    private readonly Dictionary<string, Button> _autoButtons = new();
+    private readonly HashSet<string> _auto = new(); // human seats currently played by the bot
     private readonly RandomNumberGenerator _rng = new();
     private readonly List<Token> _movable = new();
 
     // Players who have brought all four tokens home: color -> rank (1 = first)
     private readonly Dictionary<string, int> _ranks = new();
+
+    // Token positions before the first six of the current streak (for revoking)
+    private Dictionary<Token, int> _sixSnapshot;
 
     private int _currentIndex = 0;
     private int _diceValue = 0;
@@ -50,8 +56,14 @@ public partial class GameManager : Node
     private Label _statusLabel;
     private SoundManager _sound;
 
+    // Sparkle assets are built once and reused (creating them per burst causes hitches)
+    private GradientTexture2D _glowTexture;
+    private Gradient _sparkFade;
+
     private string CurrentColor => _activeOrder[_currentIndex];
-    private bool IsBot(string color) => _config.Seats[color] == SeatType.Bot;
+
+    private bool IsBot(string color) =>
+        _config.Seats[color] == SeatType.Bot || _auto.Contains(color);
 
     public override void _Ready()
     {
@@ -125,7 +137,7 @@ public partial class GameManager : Node
     }
 
     // =====================================
-    // UI: one dice + tag per player, status label
+    // UI: dice, name tag and Auto button per player, status label
     // =====================================
 
     private void BuildUi()
@@ -136,13 +148,15 @@ public partial class GameManager : Node
         Vector2 view = GetViewport().GetVisibleRect().Size;
         Vector2 boardTopLeft = Board.ToGlobal(Board.BoardTopLeft);
         float top = boardTopLeft.Y;
-        float bottom = top + Board.BoardSizePixels;
-        float midY = top + Board.BoardSizePixels / 2f;
+        float bottom = top + Board.BoardHeight;
+        float midX = boardTopLeft.X + Board.BoardWidth / 2f;
+        float midY = top + Board.BoardHeight / 2f;
 
         foreach (string color in _activeOrder)
         {
             Vector2 yardCenter = Board.ToGlobal(Board.GetYardCenter(color));
             bool onTop = yardCenter.Y < midY;
+            bool onLeft = yardCenter.X < midX;
 
             var dice = new DiceButton
             {
@@ -161,17 +175,11 @@ public partial class GameManager : Node
             _dice[color] = dice;
 
             // Name tag on the outer side of the dice
-            string who = IsBot(color) ? "Bot" : "Player";
-            string team = _config.IsTeams
-                ? (color == "Red" || color == "Yellow" ? " - Team 1" : " - Team 2")
-                : "";
-
             var tag = new Label
             {
-                Text = $"{color} ({who}){team}",
-                Size = new Vector2(320f, 34f),
+                Size = new Vector2(360f, 34f),
                 Position = new Vector2(
-                    yardCenter.X - 160f,
+                    yardCenter.X - 180f,
                     onTop ? diceTop - 38f : diceTop + DiceSize + 6f),
                 HorizontalAlignment = HorizontalAlignment.Center
             };
@@ -181,6 +189,31 @@ public partial class GameManager : Node
             tag.AddThemeConstantOverride("outline_size", 6);
             layer.AddChild(tag);
             _tags[color] = tag;
+            UpdateTag(color);
+
+            // Auto button: lets a bot play this seat while the player is away
+            if (_config.Seats[color] == SeatType.Human)
+            {
+                const float buttonW = 170f;
+                const float buttonH = 70f;
+
+                float bx = onLeft
+                    ? dice.Position.X + DiceSize + 18f
+                    : dice.Position.X - 18f - buttonW;
+
+                var auto = new Button
+                {
+                    Text = "Auto: OFF",
+                    ToggleMode = true,
+                    FocusMode = Control.FocusModeEnum.None,
+                    Size = new Vector2(buttonW, buttonH),
+                    Position = new Vector2(bx, diceTop + (DiceSize - buttonH) / 2f)
+                };
+                auto.AddThemeFontSizeOverride("font_size", 26);
+                auto.Toggled += on => SetAutoplay(c, on);
+                layer.AddChild(auto);
+                _autoButtons[color] = auto;
+            }
         }
 
         _statusLabel = new Label
@@ -194,10 +227,62 @@ public partial class GameManager : Node
         layer.AddChild(_statusLabel);
     }
 
+    private void UpdateTag(string color)
+    {
+        string who = _config.Seats[color] == SeatType.Bot ? "Bot"
+                   : _auto.Contains(color) ? "Auto"
+                   : "Player";
+
+        string team = _config.IsTeams
+            ? (color == "Red" || color == "Yellow" ? " - Team 1" : " - Team 2")
+            : "";
+
+        string rank = _ranks.TryGetValue(color, out int r) ? $" - {Ordinal(r)}" : "";
+
+        _tags[color].Text = $"{color} ({who}){team}{rank}";
+    }
+
     private void SetStatus(string text)
     {
         _statusLabel.Text = text;
         _statusLabel.AddThemeColorOverride("font_color", DiceButton.ColorFor(CurrentColor));
+    }
+
+    // =====================================
+    // AUTOPLAY (bot plays for a human seat until switched off)
+    // =====================================
+
+    private void SetAutoplay(string color, bool on)
+    {
+        if (on) _auto.Add(color); else _auto.Remove(color);
+
+        if (_autoButtons.TryGetValue(color, out Button button))
+            button.Text = on ? "Auto: ON" : "Auto: OFF";
+
+        UpdateTag(color);
+
+        if (_state == State.GameOver || color != CurrentColor) return;
+
+        if (_state == State.WaitingForRoll)
+        {
+            _dice[color].CanRoll = !IsBot(color);
+
+            if (on)
+            {
+                SetStatus($"{color} (auto) is thinking...");
+                GetTree().CreateTimer(BotRollDelay).Timeout += () => BotRollTick(color);
+            }
+            else
+            {
+                SetStatus($"{color}'s turn - tap your dice");
+            }
+        }
+        else if (_state == State.WaitingForMove && on)
+        {
+            // The bot takes over a choice the human was still making
+            RelayoutTokens();
+            BotChooseAndMove();
+        }
     }
 
     // =====================================
@@ -216,7 +301,7 @@ public partial class GameManager : Node
         {
             dice.CanRoll = false; // humans can't roll for a bot
             SetStatus($"{color} (bot) is thinking...");
-            GetTree().CreateTimer(BotRollDelay).Timeout += () => OnDiceClicked(color);
+            GetTree().CreateTimer(BotRollDelay).Timeout += () => BotRollTick(color);
         }
         else
         {
@@ -225,12 +310,28 @@ public partial class GameManager : Node
         }
     }
 
+    private void BotRollTick(string color)
+    {
+        if (_state != State.WaitingForRoll || color != CurrentColor) return;
+
+        // Auto was switched off while waiting: hand the dice back to the player
+        if (!IsBot(color))
+        {
+            _dice[color].CanRoll = true;
+            SetStatus($"{color}'s turn - tap your dice");
+            return;
+        }
+
+        OnDiceClicked(color);
+    }
+
     private void EndTurn(bool extraTurn)
     {
         if (!extraTurn)
         {
             _dice[CurrentColor].IsTurn = false;
             _sixStreak = 0;
+            _sixSnapshot = null;
 
             // Skip players who already finished. In team games they stay in,
             // because they move their partner's tokens.
@@ -270,14 +371,27 @@ public partial class GameManager : Node
     {
         if (_state != State.Rolling || color != CurrentColor) return;
 
-        // Three sixes in a row: the roll is void and the turn is lost
+        // Track the streak. Remember the board before the first six so the whole
+        // streak can be revoked if a third six follows.
         _sixStreak = _diceValue == 6 ? _sixStreak + 1 : 0;
+
+        if (_sixStreak == 1)
+            _sixSnapshot = Board.AllTokens.ToDictionary(t => t, t => t.StepsTaken);
+        else if (_sixStreak == 0)
+            _sixSnapshot = null; // streak broken: earlier moves are permanent
 
         if (ThreeSixesLoseTurn && _sixStreak >= 3)
         {
             _state = State.Busy;
-            SetStatus($"{CurrentColor} rolled three 6s in a row - turn lost!");
-            GetTree().CreateTimer(1.3).Timeout += () => EndTurn(false);
+
+            HashSet<Token> undone = RevokeSixMoves();
+            SetStatus($"{CurrentColor} rolled three 6s - this streak's moves are undone!");
+
+            GetTree().CreateTimer(1.4).Timeout += () =>
+            {
+                foreach (Token t in undone) t.ZIndex = 0;
+                EndTurn(false);
+            };
             return;
         }
 
@@ -313,19 +427,48 @@ public partial class GameManager : Node
         // Bot chooses with a simple heuristic
         if (IsBot(CurrentColor))
         {
-            Token pick = ChooseBotMove();
-
-            _state = State.Busy;
             SetStatus($"{CurrentColor} (bot) rolled {_diceValue}");
-            pick.Highlighted = true;
-            GetTree().CreateTimer(BotMoveDelay).Timeout += () => MoveToken(pick);
+            BotChooseAndMove();
             return;
         }
 
-        // Human chooses
+        // Human chooses: highlight the movable tokens and pop crowded ones out
         _state = State.WaitingForMove;
         foreach (Token t in _movable) t.Highlighted = true;
+        PopOutMovableStacks();
         SetStatus($"{CurrentColor} rolled {_diceValue} - pick a token");
+    }
+
+    private void BotChooseAndMove()
+    {
+        Token pick = ChooseBotMove();
+
+        _state = State.Busy;
+        foreach (Token t in _movable) t.Highlighted = false;
+        pick.Highlighted = true;
+
+        GetTree().CreateTimer(BotMoveDelay).Timeout += () => MoveToken(pick);
+    }
+
+    // Puts every token back where it was before this streak's sixes
+    private HashSet<Token> RevokeSixMoves()
+    {
+        var changed = new HashSet<Token>();
+
+        if (_sixSnapshot == null) return changed;
+
+        foreach (var pair in _sixSnapshot)
+        {
+            if (!IsInstanceValid(pair.Key)) continue;
+            if (pair.Key.StepsTaken == pair.Value) continue;
+
+            pair.Key.StepsTaken = pair.Value;
+            changed.Add(pair.Key);
+        }
+
+        _sixSnapshot = null;
+        RelayoutTokens(changed); // they glide back to their old cells
+        return changed;
     }
 
     // =====================================
@@ -389,9 +532,12 @@ public partial class GameManager : Node
 
         // Moving token returns to full size and draws above the others
         token.ZIndex = 10;
-        token.CreateTween().TweenProperty(token, "scale", Vector2.One, 0.12f);
+        token.ScaleTo(1f, 0.15f);
 
-        Tween tween = token.MoveAlongPath(path, 0.15f, _sound.PlayStep);
+        // Other tokens settle back into their normal layout (undoes any pop-out)
+        RelayoutTokens(null, token);
+
+        Tween tween = token.MoveAlongPath(path, 0.17f, _sound.PlayStep);
         tween.Finished += () => OnMoveFinished(token);
     }
 
@@ -402,23 +548,16 @@ public partial class GameManager : Node
         // Landing on an unsafe cell sends every opposing token there back to its yard
         List<Token> captured = FindCaptures(token);
         foreach (Token victim in captured)
-        {
             victim.StepsTaken = -1;
-            victim.ZIndex = 5; // drawn above everything while it flies home
-        }
 
         RelayoutTokens(new HashSet<Token>(captured));
 
-        // Capture sound, or the "stamp" sound when landing on a safe square of the shared track
         if (captured.Count > 0)
             _sound.PlayCapture();
-        else if (Board.GetPathIndex(token.PlayerColor, token.StepsTaken) >= 0
-                 && Board.IsSafe(token.PlayerColor, token.StepsTaken))
-            _sound.PlayStar();
 
         string victims = string.Join(", ", captured.Select(t => t.PlayerColor).Distinct());
 
-        // Sparkles when a token gets home; rank (and a bigger burst) when the whole house is done
+        // Sparkles + sound when a token gets home; rank (and a bigger burst) when the whole house is done
         string tokenOwner = token.PlayerColor;
         bool reachedHome = token.IsFinished;
         bool houseDone = false;
@@ -427,6 +566,7 @@ public partial class GameManager : Node
         if (reachedHome)
         {
             SpawnSparkles(token.GlobalPosition, 28);
+            _sound.PlayStar();
 
             if (AllFinished(tokenOwner) && !_ranks.ContainsKey(tokenOwner))
             {
@@ -505,16 +645,23 @@ public partial class GameManager : Node
         int rank = _ranks.Count + 1;
         _ranks[color] = rank;
 
+        // Ranks are permanent, so an unfinished six-streak can no longer be revoked
+        _sixSnapshot = null;
+
         // The house is replaced by a rank medal
         Board.SetRank(color, rank);
         SpawnSparkles(Board.ToGlobal(Board.GetYardCenter(color)), 70);
 
-        string who = IsBot(color) ? "Bot" : "Player";
-        _tags[color].Text = $"{color} ({who}) - {Ordinal(rank)}";
+        UpdateTag(color);
 
         // Free-for-all: this player is out of the rotation
         if (!_config.IsTeams)
+        {
             _dice[color].Visible = false;
+
+            if (_autoButtons.TryGetValue(color, out Button button))
+                button.Visible = false;
+        }
 
         return rank;
     }
@@ -553,6 +700,8 @@ public partial class GameManager : Node
             d.CanRoll = false;
             d.IsTurn = false;
         }
+        foreach (Button b in _autoButtons.Values)
+            b.Disabled = true;
 
         SetStatus(title);
 
@@ -564,25 +713,28 @@ public partial class GameManager : Node
     // One-shot burst of glowing sparks at a screen position
     private void SpawnSparkles(Vector2 globalPosition, int amount)
     {
-        // Soft round glow used as the particle texture
-        var glowGradient = new Gradient();
-        glowGradient.SetColor(0, Colors.White);
-        glowGradient.SetColor(1, new Color(1, 1, 1, 0));
-
-        var glow = new GradientTexture2D
+        // Built once, reused for every burst
+        if (_glowTexture == null)
         {
-            Gradient = glowGradient,
-            Fill = GradientTexture2D.FillEnum.Radial,
-            FillFrom = new Vector2(0.5f, 0.5f),
-            FillTo = new Vector2(1f, 0.5f),
-            Width = 32,
-            Height = 32
-        };
+            var glowGradient = new Gradient();
+            glowGradient.SetColor(0, Colors.White);
+            glowGradient.SetColor(1, new Color(1, 1, 1, 0));
 
-        // Gold that fades out over the particle's life
-        var fade = new Gradient();
-        fade.SetColor(0, new Color(1f, 0.95f, 0.6f, 1f));
-        fade.SetColor(1, new Color(1f, 0.7f, 0.2f, 0f));
+            _glowTexture = new GradientTexture2D
+            {
+                Gradient = glowGradient,
+                Fill = GradientTexture2D.FillEnum.Radial,
+                FillFrom = new Vector2(0.5f, 0.5f),
+                FillTo = new Vector2(1f, 0.5f),
+                Width = 32,
+                Height = 32
+            };
+
+            // Gold that fades out over the particle's life
+            _sparkFade = new Gradient();
+            _sparkFade.SetColor(0, new Color(1f, 0.95f, 0.6f, 1f));
+            _sparkFade.SetColor(1, new Color(1f, 0.7f, 0.2f, 0f));
+        }
 
         var sparkles = new CpuParticles2D
         {
@@ -591,7 +743,7 @@ public partial class GameManager : Node
             Lifetime = 1.0,
             OneShot = true,
             Explosiveness = 0.9f,
-            Texture = glow,
+            Texture = _glowTexture,
             Direction = Vector2.Up,
             Spread = 180f,
             Gravity = Vector2.Zero,
@@ -599,7 +751,7 @@ public partial class GameManager : Node
             InitialVelocityMax = 320f,
             ScaleAmountMin = 0.6f,
             ScaleAmountMax = 1.6f,
-            ColorRamp = fade,
+            ColorRamp = _sparkFade,
             ZIndex = 50,
             Material = new CanvasItemMaterial
             {
@@ -755,7 +907,7 @@ public partial class GameManager : Node
 
         SpawnConfetti(layer, view);
 
-        // Centered panel: title + button
+        // Centered panel: title, standings, button
         var panel = new VBoxContainer
         {
             Size = new Vector2(view.X, 700f),
@@ -849,73 +1001,110 @@ public partial class GameManager : Node
     }
 
     // =====================================
-    // TOKEN STACKING (stars, start cells, anywhere tokens share a cell)
+    // TOKEN LAYOUT: stacks, pop-out, smooth gliding
     // =====================================
 
-    private void RelayoutTokens(HashSet<Token> returningHome = null)
+    // Groups tokens that stand on the same board cell (yard tokens are ignored)
+    private Dictionary<Vector2I, (Vector2 Pos, List<Token> Tokens)> GroupByCell(Token skip)
     {
-        var groups = new Dictionary<Vector2I, List<Token>>();
-        var basePositions = new Dictionary<Vector2I, Vector2>();
+        var groups = new Dictionary<Vector2I, (Vector2 Pos, List<Token> Tokens)>();
 
         foreach (Token t in Board.AllTokens)
         {
-            if (t.IsInYard)
-            {
-                bool flyingHome = returningHome != null && returningHome.Contains(t);
-                PlaceToken(t, t.YardPosition, 1f, flyingHome ? 0.55f : 0.15f);
-                continue;
-            }
+            if (t == skip || t.IsInYard) continue;
 
             Vector2 basePos = Board.GetTokenLocalPosition(t.PlayerColor, t.StepsTaken);
             var key = new Vector2I(Mathf.RoundToInt(basePos.X), Mathf.RoundToInt(basePos.Y));
 
-            if (!groups.ContainsKey(key))
+            if (!groups.TryGetValue(key, out var group))
             {
-                groups[key] = new List<Token>();
-                basePositions[key] = basePos;
+                group = (basePos, new List<Token>());
+                groups[key] = group;
             }
 
-            groups[key].Add(t);
+            group.Tokens.Add(t);
         }
 
-        foreach (var pair in groups)
+        return groups;
+    }
+
+    // Glides every token to its resting place. Tokens in "flying" move slower and draw on top
+    // (used for captured tokens going home and for revoked moves). "skip" is left alone.
+    private void RelayoutTokens(HashSet<Token> flying = null, Token skip = null)
+    {
+        foreach (Token t in Board.AllTokens)
         {
-            List<Token> list = pair.Value;
-            int n = list.Count;
+            if (t == skip || !t.IsInYard) continue;
+            PlaceToken(t, t.YardPosition, 1f, flying);
+        }
+
+        foreach (var group in GroupByCell(skip).Values)
+        {
+            int n = group.Tokens.Count;
 
             for (int i = 0; i < n; i++)
+                PlaceToken(group.Tokens[i], group.Pos + StackOffset(i, n), StackScale(n), flying);
+        }
+    }
+
+    private void PlaceToken(Token token, Vector2 position, float scale, HashSet<Token> flying)
+    {
+        bool fly = flying != null && flying.Contains(token);
+
+        token.ZIndex = fly ? 5 : 0;
+        token.GlideTo(position, scale, fly ? 0.55f : 0.22f);
+    }
+
+    // When it's the player's choice: movable tokens that share a cell with others
+    // pop out in a row, larger, so they are easy to see and tap.
+    private void PopOutMovableStacks()
+    {
+        foreach (var group in GroupByCell(null).Values)
+        {
+            if (group.Tokens.Count < 2) continue;
+
+            List<Token> mine = group.Tokens.Where(t => _movable.Contains(t)).ToList();
+            if (mine.Count == 0) continue;
+
+            // Tokens left behind re-spread in the small stack
+            List<Token> rest = group.Tokens.Where(t => !mine.Contains(t)).ToList();
+            for (int i = 0; i < rest.Count; i++)
+                PlaceToken(rest[i], group.Pos + StackOffset(i, rest.Count), StackScale(rest.Count), null);
+
+            // Movable tokens: a row just above the cell, bigger than normal
+            float spacing = Board.CellWidth * 0.80f;
+            float startX = -spacing * (mine.Count - 1) / 2f;
+
+            for (int i = 0; i < mine.Count; i++)
             {
-                Vector2 pos = basePositions[pair.Key] + StackOffset(i, n);
-                PlaceToken(list[i], pos, StackScale(n));
+                Vector2 pos = group.Pos + new Vector2(startX + i * spacing, -Board.CellHeight * 0.85f);
+
+                mine[i].ZIndex = 30;
+                mine[i].GlideTo(pos, 1.25f, 0.3f, overshoot: true);
             }
         }
     }
 
-    private void PlaceToken(Token token, Vector2 position, float scale, float duration = 0.15f)
-    {
-        Tween tween = token.CreateTween();
-        tween.SetParallel(true);
-        tween.TweenProperty(token, "position", position, duration);
-        tween.TweenProperty(token, "scale", new Vector2(scale, scale), duration);
-    }
-
+    // Offsets for several tokens sharing a cell (ellipse, because cells are taller than wide)
     private Vector2 StackOffset(int index, int count)
     {
         if (count == 1) return Vector2.Zero;
 
-        float radius = Board.CellAspect * count switch
+        float rx = Board.CellWidth * count switch
         {
             2 => 0.25f,
-            3 => 0.26f,
-            4 => 0.27f,
-            _ => 0.34f
+            3 => 0.27f,
+            4 => 0.30f,
+            _ => 0.36f
         };
+
+        float ry = rx * (Board.CellHeight / Board.CellWidth) * 0.9f;
 
         // Two tokens sit side by side; more form a ring starting at the top
         float start = count == 2 ? Mathf.Pi : -Mathf.Pi / 2f;
         float angle = start + Mathf.Tau * index / count;
 
-        return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+        return new Vector2(Mathf.Cos(angle) * rx, Mathf.Sin(angle) * ry);
     }
 
     private static float StackScale(int count)
@@ -923,10 +1112,10 @@ public partial class GameManager : Node
         return count switch
         {
             1 => 1f,
-            2 => 0.70f,
-            3 => 0.55f,
-            4 => 0.50f,
-            _ => 0.38f
+            2 => 0.72f,
+            3 => 0.62f,
+            4 => 0.58f,
+            _ => 0.46f
         };
     }
 }
