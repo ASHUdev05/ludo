@@ -903,7 +903,7 @@ public partial class GameManager : Node
     {
         if (count == 1) return Vector2.Zero;
 
-        float radius = Board.CellSize * count switch
+        float radius = Board.CellAspect * count switch
         {
             2 => 0.25f,
             3 => 0.26f,

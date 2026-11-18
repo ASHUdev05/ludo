@@ -3,18 +3,27 @@ using System.Collections.Generic;
 
 public partial class BoardManager : Node2D
 {
-    [Export] public float BoardSizePixels = 900f;
+    [Export] public float BoardSizePixels = 900f; // board width (ignored when FitToViewport is on)
     [Export] public Vector2 BoardTopLeft = Vector2.Zero;
     [Export] public PackedScene TokenScene;
 
-    // Centers the board in the game window (works for the 1080x1920 portrait setup)
+    // Centers the board in the game window
     [Export] public bool CenterInViewport = true;
 
-    // Grows the board to fill the screen width (ignores BoardSizePixels when on)
+    // Grows the board to fill the screen width
     [Export] public bool FitToViewport = true;
     [Export] public float BoardMargin = 24f;
 
-    private float _cellSize;
+    // Cell height compared with cell width. 1.5 = path boxes are 1.5x taller.
+    // Reduced automatically if the screen is not tall enough.
+    [Export] public float CellAspect = 1.5f;
+
+    // Height kept free for dice, labels and status text
+    [Export] public float ReservedHeight = 760f;
+
+    private float _cellW;
+    private float _cellH;
+    private float _cellMin;
     private Node2D _tokensNode;
 
     private readonly Color RedColor    = new Color(0.90f, 0.04f, 0.04f);
@@ -24,7 +33,10 @@ public partial class BoardManager : Node2D
 
     private const float GridLineWidth = 2f;
 
-    public float CellSize => _cellSize;
+    public float CellWidth => _cellW;
+    public float CellHeight => _cellH;
+    public float BoardWidth => _cellW * 15f;
+    public float BoardHeight => _cellH * 15f;
 
     public List<Vector2> MainPathPositions { get; private set; } = new();
     public Dictionary<string, List<Vector2>> HomePathPositions { get; private set; } = new();
@@ -76,15 +88,20 @@ public partial class BoardManager : Node2D
     {
         Vector2 view = GetViewportRect().Size;
 
-        // Fill the width (minus a margin), but leave ~760px of height for dice and labels
+        // Fill the screen width
         if (FitToViewport)
-            BoardSizePixels = Mathf.Max(300f, Mathf.Min(view.X - 2f * BoardMargin, view.Y - 760f));
+            BoardSizePixels = Mathf.Max(300f, view.X - 2f * BoardMargin);
 
-        _cellSize = BoardSizePixels / 15f;
+        _cellW = BoardSizePixels / 15f;
+
+        // Make the cells taller (up to CellAspect) using the spare screen height
+        float maxAspect = Mathf.Max(1f, (view.Y - ReservedHeight) / (15f * _cellW));
+        _cellH = _cellW * Mathf.Clamp(CellAspect, 1f, maxAspect);
+        _cellMin = Mathf.Min(_cellW, _cellH);
 
         if (CenterInViewport)
         {
-            Vector2 boardSize = new Vector2(BoardSizePixels, BoardSizePixels);
+            Vector2 boardSize = new Vector2(BoardWidth, BoardHeight);
             BoardTopLeft = ToLocal((view - boardSize) / 2f);
         }
 
@@ -141,7 +158,7 @@ public partial class BoardManager : Node2D
         QueueRedraw();
     }
 
-    // Colors that are not playing this game (their yard circles are drawn grey)
+    // Colors that are not playing this game (their yard sockets are drawn grey)
     private readonly HashSet<string> _inactiveColors = new();
 
     // Removes a seat from the game: frees its tokens and greys out its yard
@@ -186,21 +203,21 @@ public partial class BoardManager : Node2D
     public Vector2 GridToScreen(int col, int row)
     {
         return BoardTopLeft + new Vector2(
-            (col + 0.5f) * _cellSize,
-            (row + 0.5f) * _cellSize
+            (col + 0.5f) * _cellW,
+            (row + 0.5f) * _cellH
         );
     }
 
     private Vector2 GridPoint(float x, float y)
     {
-        return BoardTopLeft + new Vector2(x * _cellSize, y * _cellSize);
+        return BoardTopLeft + new Vector2(x * _cellW, y * _cellH);
     }
 
     private Rect2 CellRect(int col, int row)
     {
         return new Rect2(
-            BoardTopLeft + new Vector2(col * _cellSize, row * _cellSize),
-            new Vector2(_cellSize, _cellSize)
+            BoardTopLeft + new Vector2(col * _cellW, row * _cellH),
+            new Vector2(_cellW, _cellH)
         );
     }
 
@@ -255,7 +272,7 @@ public partial class BoardManager : Node2D
 
             token.PlayerColor = color;
             token.TokenId = i;
-            token.Radius = _cellSize * 0.367f; // same proportion as 22px on a 60px cell
+            token.Radius = _cellW * 0.40f; // pawn is about 70% of a cell wide
 
             Vector2 boardPosition = GridPoint(
                 yardOrigin.X + _yardSlots[i].X,
@@ -286,19 +303,19 @@ public partial class BoardManager : Node2D
         DrawGridLines();
 
         DrawRect(
-            new Rect2(BoardTopLeft, new Vector2(BoardSizePixels, BoardSizePixels)),
+            new Rect2(BoardTopLeft, new Vector2(BoardWidth, BoardHeight)),
             Colors.Black, false, 3f
         );
     }
 
     private void DrawHomeAreas()
     {
-        float size = _cellSize * 6f;
+        Vector2 size = new Vector2(_cellW * 6f, _cellH * 6f);
 
-        DrawRect(new Rect2(GridPoint(0, 0), new Vector2(size, size)), RedColor);
-        DrawRect(new Rect2(GridPoint(9, 0), new Vector2(size, size)), GreenColor);
-        DrawRect(new Rect2(GridPoint(9, 9), new Vector2(size, size)), YellowColor);
-        DrawRect(new Rect2(GridPoint(0, 9), new Vector2(size, size)), BlueColor);
+        DrawRect(new Rect2(GridPoint(0, 0), size), RedColor);
+        DrawRect(new Rect2(GridPoint(9, 0), size), GreenColor);
+        DrawRect(new Rect2(GridPoint(9, 9), size), YellowColor);
+        DrawRect(new Rect2(GridPoint(0, 9), size), BlueColor);
     }
 
     private bool IsTrackCell(int col, int row)
@@ -346,36 +363,41 @@ public partial class BoardManager : Node2D
 
     private void DrawYard(string name, Vector2I origin, Color color)
     {
-        // Empty seats get grey circles
+        // Empty seats get grey sockets
         if (_inactiveColors.Contains(name))
-            color = new Color(0.78f, 0.78f, 0.78f);
+            color = new Color(0.70f, 0.70f, 0.70f);
 
         Rect2 rect = new Rect2(
             GridPoint(origin.X + 1, origin.Y + 1),
-            new Vector2(_cellSize * 4, _cellSize * 4)
+            new Vector2(_cellW * 4, _cellH * 4)
         );
 
         DrawRect(rect, Colors.White);
         DrawRect(rect, Colors.Black, false, GridLineWidth);
 
-        // Finished player: show their rank instead of the yard circles
+        // Finished player: show their rank instead of the sockets
         if (_ranks.TryGetValue(name, out int rank))
         {
             DrawRankMedal(rect, rank, color);
             return;
         }
 
+        // Sockets: pale, hollow-looking rings, clearly different from the solid pawns
         foreach (Vector2 slot in _yardSlots)
         {
             Vector2 center = GridPoint(origin.X + slot.X, origin.Y + slot.Y);
-            DrawCircle(center, _cellSize * 0.50f, color);
+            float radius = _cellW * 0.52f;
+
+            DrawCircle(center, radius, color.Lerp(Colors.White, 0.78f));
+            DrawArc(center, radius, 0f, Mathf.Tau, 48, color, 4f, true);
+            DrawArc(center, radius * 0.5f, 0f, Mathf.Tau, 32, color.Lerp(Colors.White, 0.45f), 3f, true);
         }
     }
 
     private void DrawRankMedal(Rect2 box, int rank, Color playerColor)
     {
         Vector2 center = box.GetCenter();
-        float radius = _cellSize * 1.7f;
+        float radius = _cellW * 1.7f;
 
         Color medal = rank switch
         {
@@ -398,7 +420,7 @@ public partial class BoardManager : Node2D
         };
 
         Font font = ThemeDB.FallbackFont;
-        int fontSize = (int)(_cellSize * 1.5f);
+        int fontSize = (int)(_cellW * 1.5f);
         Vector2 pos = new Vector2(box.Position.X, center.Y + fontSize * 0.33f);
 
         DrawStringOutline(font, pos, text, HorizontalAlignment.Center, box.Size.X, fontSize, 12, Colors.Black);
@@ -419,7 +441,7 @@ public partial class BoardManager : Node2D
         DrawColoredPolygon(new Vector2[] { bottomLeft, bottomRight, center }, BlueColor);
 
         DrawRect(
-            new Rect2(topLeft, new Vector2(_cellSize * 3, _cellSize * 3)),
+            new Rect2(topLeft, new Vector2(_cellW * 3, _cellH * 3)),
             Colors.Black, false, GridLineWidth
         );
     }
@@ -444,7 +466,7 @@ public partial class BoardManager : Node2D
         for (int i = 0; i < 10; i++)
         {
             float angle = Mathf.Pi * i / 5f - Mathf.Pi / 2f;
-            float radius = i % 2 == 0 ? _cellSize * 0.38f : _cellSize * 0.17f;
+            float radius = i % 2 == 0 ? _cellMin * 0.38f : _cellMin * 0.17f;
 
             points[i] = center + new Vector2(
                 Mathf.Cos(angle) * radius,
@@ -458,15 +480,15 @@ public partial class BoardManager : Node2D
         for (int i = 0; i < 10; i++) outline[i] = points[i];
         outline[10] = points[0];
 
-        DrawPolyline(outline, Colors.Black, 1.5f);
+        DrawPolyline(outline, Colors.Black, 1.5f, true);
     }
 
     private void DrawArrow(Vector2 center, Vector2 direction, Color color)
     {
         Vector2 perpendicular = new Vector2(-direction.Y, direction.X);
 
-        float length = _cellSize * 0.42f;
-        float width  = _cellSize * 0.22f;
+        float length = _cellMin * 0.42f;
+        float width  = _cellMin * 0.22f;
 
         Vector2[] points =
         {
@@ -487,7 +509,7 @@ public partial class BoardManager : Node2D
             points[4], points[5], points[6], points[0]
         };
 
-        DrawPolyline(outline, Colors.Black, 1.5f);
+        DrawPolyline(outline, Colors.Black, 1.5f, true);
     }
 
     private void DrawGridLines()
