@@ -280,7 +280,7 @@ public partial class Token : Area2D
                 }
             }), 0f, (float)n, n * stepDuration)
             .SetTrans(Tween.TransitionType.Sine)
-            .SetEase(Tween.EaseType.InOut);
+            .SetEase(Tween.EaseType.Out);
 
         _moveTween.TweenCallback(Callable.From(() => SetLift(0f)));
 

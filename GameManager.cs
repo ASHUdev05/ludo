@@ -27,8 +27,11 @@ public partial class GameManager : Node
     [Export] public float SixWeight = 2.0f;
 
     // Bot pacing (seconds)
-    [Export] public float BotRollDelay = 0.8f;
-    [Export] public float BotMoveDelay = 0.7f;
+    [Export] public float BotRollDelay = 0.45f;
+    [Export] public float BotMoveDelay = 0.40f;
+
+    // Time a token takes to hop one cell (shorter = snappier moves)
+    [Export] public float HopDuration = 0.10f;
 
     private const int HomeSteps = 56; // 0..50 track, 51..55 lane, 56 = finished
 
@@ -387,7 +390,7 @@ public partial class GameManager : Node
             HashSet<Token> undone = RevokeSixMoves();
             SetStatus($"{CurrentColor} rolled three 6s - this streak's moves are undone!");
 
-            GetTree().CreateTimer(1.4).Timeout += () =>
+            GetTree().CreateTimer(1.0).Timeout += () =>
             {
                 foreach (Token t in undone) t.ZIndex = 0;
                 EndTurn(false);
@@ -403,7 +406,7 @@ public partial class GameManager : Node
         {
             _state = State.Busy;
             SetStatus($"{CurrentColor} rolled {_diceValue} - no moves");
-            GetTree().CreateTimer(1.0).Timeout += () => EndTurn(false);
+            GetTree().CreateTimer(0.7).Timeout += () => EndTurn(false);
             return;
         }
 
@@ -420,7 +423,7 @@ public partial class GameManager : Node
 
             _state = State.Busy;
             SetStatus($"{CurrentColor} rolled {_diceValue}");
-            GetTree().CreateTimer(0.5).Timeout += () => MoveToken(pick);
+            GetTree().CreateTimer(0.25).Timeout += () => MoveToken(pick);
             return;
         }
 
@@ -537,7 +540,7 @@ public partial class GameManager : Node
         // Other tokens settle back into their normal layout (undoes any pop-out)
         RelayoutTokens(null, token);
 
-        Tween tween = token.MoveAlongPath(path, 0.17f, _sound.PlayStep);
+        Tween tween = token.MoveAlongPath(path, HopDuration, _sound.PlayStep);
         tween.Finished += () => OnMoveFinished(token);
     }
 
@@ -596,7 +599,7 @@ public partial class GameManager : Node
             else if (reachedHome) parts.Add($"{tokenOwner} got a token home!");
             SetStatus(string.Join("  ", parts));
 
-            GetTree().CreateTimer(0.9).Timeout += () =>
+            GetTree().CreateTimer(0.6).Timeout += () =>
             {
                 foreach (Token victim in captured) victim.ZIndex = 0;
                 EndTurn(extraTurn);
@@ -706,7 +709,7 @@ public partial class GameManager : Node
         SetStatus(title);
 
         // Short pause so the final hop and sparkles are visible before the overlay
-        GetTree().CreateTimer(0.9).Timeout += () => ShowWinScreen(title, colorName);
+        GetTree().CreateTimer(0.6).Timeout += () => ShowWinScreen(title, colorName);
         return true;
     }
 
@@ -1005,9 +1008,9 @@ public partial class GameManager : Node
     // =====================================
 
     // Groups tokens that stand on the same board cell (yard tokens are ignored)
-    private Dictionary<Vector2I, (Vector2 Pos, List<Token> Tokens)> GroupByCell(Token skip)
+    private Dictionary<Vector2I, (Vector2 Pos, Vector2 Cell, List<Token> Tokens)> GroupByCell(Token skip)
     {
-        var groups = new Dictionary<Vector2I, (Vector2 Pos, List<Token> Tokens)>();
+        var groups = new Dictionary<Vector2I, (Vector2 Pos, Vector2 Cell, List<Token> Tokens)>();
 
         foreach (Token t in Board.AllTokens)
         {
@@ -1018,7 +1021,7 @@ public partial class GameManager : Node
 
             if (!groups.TryGetValue(key, out var group))
             {
-                group = (basePos, new List<Token>());
+                group = (basePos, Board.GetCellSize(t.PlayerColor, t.StepsTaken), new List<Token>());
                 groups[key] = group;
             }
 
@@ -1043,7 +1046,7 @@ public partial class GameManager : Node
             int n = group.Tokens.Count;
 
             for (int i = 0; i < n; i++)
-                PlaceToken(group.Tokens[i], group.Pos + StackOffset(i, n), StackScale(n), flying);
+                PlaceToken(group.Tokens[i], group.Pos + StackOffset(i, n, group.Cell), StackScale(n), flying);
         }
     }
 
@@ -1052,16 +1055,17 @@ public partial class GameManager : Node
         bool fly = flying != null && flying.Contains(token);
 
         token.ZIndex = fly ? 5 : 0;
-        token.GlideTo(position, scale, fly ? 0.55f : 0.22f);
+        token.GlideTo(position, scale, fly ? 0.4f : 0.16f);
     }
 
-    // When it's the player's choice: movable tokens that share a cell with others
-    // pop out in a row, larger, so they are easy to see and tap.
+    // When it's the player's choice and three or more tokens share a cell, the player's
+    // movable tokens fan out at normal size so they are easy to see and tap.
+    // They stay close to their own cell so they don't hide neighbouring cells.
     private void PopOutMovableStacks()
     {
         foreach (var group in GroupByCell(null).Values)
         {
-            if (group.Tokens.Count < 2) continue;
+            if (group.Tokens.Count < 3) continue;
 
             List<Token> mine = group.Tokens.Where(t => _movable.Contains(t)).ToList();
             if (mine.Count == 0) continue;
@@ -1069,28 +1073,29 @@ public partial class GameManager : Node
             // Tokens left behind re-spread in the small stack
             List<Token> rest = group.Tokens.Where(t => !mine.Contains(t)).ToList();
             for (int i = 0; i < rest.Count; i++)
-                PlaceToken(rest[i], group.Pos + StackOffset(i, rest.Count), StackScale(rest.Count), null);
+                PlaceToken(rest[i], group.Pos + StackOffset(i, rest.Count, group.Cell), StackScale(rest.Count), null);
 
-            // Movable tokens: a row just above the cell, bigger than normal
-            float spacing = Board.CellWidth * 0.80f;
+            // Movable tokens: overlapping fan, normal size, nudged slightly up
+            float pawnWidth = mine[0].Radius * 1.76f;
+            float spacing = pawnWidth * 0.62f;
             float startX = -spacing * (mine.Count - 1) / 2f;
 
             for (int i = 0; i < mine.Count; i++)
             {
-                Vector2 pos = group.Pos + new Vector2(startX + i * spacing, -Board.CellHeight * 0.85f);
+                Vector2 pos = group.Pos + new Vector2(startX + i * spacing, -group.Cell.Y * 0.18f);
 
-                mine[i].ZIndex = 30;
-                mine[i].GlideTo(pos, 1.25f, 0.3f, overshoot: true);
+                mine[i].ZIndex = 30 + i;
+                mine[i].GlideTo(pos, 1f, 0.2f);
             }
         }
     }
 
-    // Offsets for several tokens sharing a cell (ellipse, because cells are taller than wide)
-    private Vector2 StackOffset(int index, int count)
+    // Offsets for several tokens sharing a cell (scaled to that cell's width and height)
+    private static Vector2 StackOffset(int index, int count, Vector2 cell)
     {
         if (count == 1) return Vector2.Zero;
 
-        float rx = Board.CellWidth * count switch
+        float f = count switch
         {
             2 => 0.25f,
             3 => 0.27f,
@@ -1098,7 +1103,8 @@ public partial class GameManager : Node
             _ => 0.36f
         };
 
-        float ry = rx * (Board.CellHeight / Board.CellWidth) * 0.9f;
+        float rx = cell.X * f;
+        float ry = cell.Y * f * 0.9f;
 
         // Two tokens sit side by side; more form a ring starting at the top
         float start = count == 2 ? Mathf.Pi : -Mathf.Pi / 2f;

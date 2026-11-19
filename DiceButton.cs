@@ -11,7 +11,7 @@ public partial class DiceButton : Control
     public string PlayerColor = "Red";
     public int Value { get; private set; } = 1;
 
-    public const float RollDuration = 0.9f;
+    public const float RollDuration = 0.5f;
 
     private bool _canRoll = false;
     private bool _isTurn = false;
@@ -83,7 +83,7 @@ public partial class DiceButton : Control
             _shuffleTimer -= (float)delta;
             if (_shuffleTimer <= 0f)
             {
-                _shuffleTimer = 0.07f;
+                _shuffleTimer = 0.05f;
 
                 int next = _shownValue;
                 while (next == _shownValue)
