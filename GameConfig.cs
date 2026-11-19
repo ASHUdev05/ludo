@@ -14,6 +14,9 @@ public class GameConfig
     // Remembered between games (survives scene reloads)
     public static GameConfig Last;
 
+    // Set before reloading the scene to start a rematch without showing the setup screen
+    public static bool SkipSetup;
+
     public GameMode Mode = GameMode.FourPlayers;
 
     public Dictionary<string, SeatType> Seats = new()

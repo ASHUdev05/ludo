@@ -2,10 +2,13 @@ using Godot;
 using System;
 using System.Collections.Generic;
 
-// A Ludo token drawn as a pawn (round head, tapered body, wide foot) so it can't
-// be confused with the round placeholder sockets in the yards.
+// A Ludo token. Each color has its own shape so players can tell them apart
+// without relying on color alone:
+//   Red = pawn, Green = diamond, Yellow = star, Blue = orb
 public partial class Token : Area2D
 {
+    private enum Shape { Pawn, Diamond, Star, Orb }
+
     [Export] public string PlayerColor = "Red";
     [Export] public int TokenId = 0;
 
@@ -23,7 +26,7 @@ public partial class Token : Area2D
 
     private bool _highlighted = false;
     private float _ringAngle = 0f;
-    private float _lift = 0f; // how far the pawn is raised while hopping
+    private float _lift = 0f; // how far the token is raised while hopping
 
     // One tween per kind of motion, so a new move always replaces the old one
     private Tween _moveTween;
@@ -43,6 +46,14 @@ public partial class Token : Area2D
 
     // GameManager listens to this
     public event Action<Token> OnTokenClicked;
+
+    private Shape Kind => PlayerColor switch
+    {
+        "Red" => Shape.Pawn,
+        "Green" => Shape.Diamond,
+        "Yellow" => Shape.Star,
+        _ => Shape.Orb
+    };
 
     private Color GetColorCode()
     {
@@ -102,7 +113,7 @@ public partial class Token : Area2D
             DrawDashedRing(r * 1.55f, Colors.White, 3.5f * k);
         }
 
-        // Ground shadow (shrinks while the pawn is in the air)
+        // Ground shadow (shrinks while the token is in the air)
         float shrink = 1f - Mathf.Clamp(_lift / (r * 1.6f), 0f, 0.35f);
         DrawColoredPolygon(
             Ellipse(new Vector2(0, r * 0.98f), r * 0.95f * shrink, r * 0.26f * shrink),
@@ -111,6 +122,20 @@ public partial class Token : Area2D
         // Everything below is lifted together while hopping
         DrawSetTransform(new Vector2(0, -_lift), 0f, Vector2.One);
 
+        switch (Kind)
+        {
+            case Shape.Pawn: DrawPawn(r, k, body, dark, light); break;
+            case Shape.Diamond: DrawDiamond(r, k, body, dark, light); break;
+            case Shape.Star: DrawStarToken(r, k, body, dark, light); break;
+            default: DrawOrb(r, k, body, dark, light); break;
+        }
+
+        DrawSetTransform(Vector2.Zero, 0f, Vector2.One);
+    }
+
+    // Red: round head, tapered body, wide foot
+    private void DrawPawn(float r, float k, Color body, Color dark, Color light)
+    {
         // Foot
         Vector2[] foot = Ellipse(new Vector2(0, r * 0.92f), r * 0.88f, r * 0.24f);
         DrawColoredPolygon(foot, dark);
@@ -135,8 +160,70 @@ public partial class Token : Area2D
         DrawColoredPolygon(
             Ellipse(head + new Vector2(-r * 0.18f, -r * 0.20f), r * 0.17f, r * 0.11f),
             new Color(1, 1, 1, 0.55f));
+    }
 
-        DrawSetTransform(Vector2.Zero, 0f, Vector2.One);
+    // Green: a cut gem with light and dark facets
+    private void DrawDiamond(float r, float k, Color body, Color dark, Color light)
+    {
+        Vector2 top = new Vector2(0, -r * 1.15f);
+        Vector2 right = new Vector2(r * 0.95f, -r * 0.10f);
+        Vector2 bottom = new Vector2(0, r * 1.00f);
+        Vector2 left = new Vector2(-r * 0.95f, -r * 0.10f);
+        Vector2 mid = new Vector2(0, -r * 0.10f);
+
+        DrawColoredPolygon(new[] { top, right, bottom, left }, body);
+        DrawColoredPolygon(new[] { top, left, mid }, light);     // upper-left facet
+        DrawColoredPolygon(new[] { right, bottom, mid }, dark);  // lower-right facet
+
+        DrawLine(left, right, new Color(0, 0, 0, 0.35f), 1.5f * k, true);
+        DrawPolyline(new[] { top, right, bottom, left, top }, Colors.Black, 2.4f * k, true);
+
+        // Shine
+        DrawColoredPolygon(
+            Ellipse(new Vector2(-r * 0.28f, -r * 0.55f), r * 0.14f, r * 0.09f),
+            new Color(1, 1, 1, 0.6f));
+    }
+
+    // Yellow: a five-point star
+    private void DrawStarToken(float r, float k, Color body, Color dark, Color light)
+    {
+        Vector2 center = new Vector2(0, -r * 0.05f);
+        var points = new Vector2[10];
+
+        for (int i = 0; i < 10; i++)
+        {
+            float angle = Mathf.Pi * i / 5f - Mathf.Pi / 2f;
+            float radius = i % 2 == 0 ? r * 1.22f : r * 0.55f;
+            points[i] = center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+        }
+
+        DrawColoredPolygon(points, body);
+
+        // Lighter smaller star in the middle
+        var inner = new Vector2[10];
+        for (int i = 0; i < 10; i++)
+            inner[i] = center + (points[i] - center) * 0.5f;
+        DrawColoredPolygon(inner, new Color(light.R, light.G, light.B, 0.75f));
+
+        DrawPolyline(Close(points), Colors.Black, 2.4f * k, true);
+    }
+
+    // Blue: a solid glossy ball with a bright core (clearly not a hollow yard socket)
+    private void DrawOrb(float r, float k, Color body, Color dark, Color light)
+    {
+        float radius = r * 1.0f;
+
+        DrawCircle(Vector2.Zero, radius, dark);
+        DrawCircle(new Vector2(0, -radius * 0.06f), radius * 0.9f, body);
+        DrawCircle(new Vector2(0, -radius * 0.06f), radius * 0.5f, light);
+        DrawArc(Vector2.Zero, radius, 0f, Mathf.Tau, 32, Colors.Black, 2.6f * k, true);
+        DrawArc(new Vector2(0, -radius * 0.06f), radius * 0.5f, 0f, Mathf.Tau, 24,
+            new Color(0, 0, 0, 0.3f), 1.4f * k, true);
+
+        // Shine
+        DrawColoredPolygon(
+            Ellipse(new Vector2(-radius * 0.38f, -radius * 0.50f), radius * 0.20f, radius * 0.12f),
+            new Color(1, 1, 1, 0.65f));
     }
 
     private Vector2[] BuildBody(float r)
@@ -251,8 +338,8 @@ public partial class Token : Area2D
     }
 
     // One continuous tween along the whole path (no stop-start between cells).
-    // The pawn arcs up and down on every cell, and onStep fires as it lands on each.
-    public Tween MoveAlongPath(IReadOnlyList<Vector2> points, float stepDuration = 0.17f, Action onStep = null)
+    // The token arcs up and down on every cell, and onStep fires as it lands on each.
+    public Tween MoveAlongPath(IReadOnlyList<Vector2> points, float stepDuration = 0.10f, Action onStep = null)
     {
         KillMotion();
 

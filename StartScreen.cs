@@ -126,6 +126,15 @@ public partial class StartScreen : CanvasLayer
         };
         box.AddChild(_startButton);
 
+        var settings = new Button
+        {
+            Text = "Settings",
+            CustomMinimumSize = new Vector2(800, 80)
+        };
+        settings.AddThemeFontSizeOverride("font_size", 36);
+        settings.Pressed += () => SettingsMenu.Open(this);
+        box.AddChild(settings);
+
         // Show the remembered mode without resetting the remembered seats
         _modeButtons[Config.Mode].SetPressedNoSignal(true);
         Refresh();
