@@ -196,7 +196,7 @@ public partial class GameManager : Node
             _layout.Relayout();
         }
 
-        RefreshMultipliers();
+        RefreshTokenMarks();
 
         _ranks.Clear();
         _currentIndex = 0;
@@ -230,11 +230,14 @@ public partial class GameManager : Node
         _hud.SetTag(color, $"{color} ({who}){team}{rank}");
     }
 
-    // Supermatch: update the "x2 / x3 / x4" badges
-    private void RefreshMultipliers()
+    // Updates what is drawn from token positions: Supermatch "x2 / x3 / x4" badges
+    // and the frames around blockades
+    private void RefreshTokenMarks()
     {
         foreach (Token t in Board.AllTokens)
             t.Multiplier = _rules.Multiplier(t);
+
+        Board.SetBlockades(_rules.GetBlockades());
     }
 
     // =====================================
@@ -246,7 +249,8 @@ public partial class GameManager : Node
         // Android back button: pause instead of quitting
         if (what == NotificationWMGoBackRequest)
         {
-            if (IsInsideTree()) TogglePause();
+            // Deferred: notifications can arrive while this node is busy adding children
+            if (IsInsideTree()) CallDeferred(nameof(TogglePause));
         }
         // Leaving the app (for example the screen turns off): remember to pause,
         // but open the menu only once the app is back and has its real size again
@@ -262,7 +266,7 @@ public partial class GameManager : Node
                 _pauseWhenBack = false;
 
                 if (IsInsideTree() && IsPlaying && !GetTree().Paused)
-                    PauseGame();
+                    CallDeferred(nameof(PauseGame));
             }
         }
     }
@@ -283,7 +287,7 @@ public partial class GameManager : Node
 
     private void PauseGame()
     {
-        if (_pauseMenu != null) return;
+        if (_pauseMenu != null || !IsPlaying) return;
 
         GetTree().Paused = true;
 
@@ -529,7 +533,7 @@ public partial class GameManager : Node
 
         _sixSnapshot = null;
         _layout.Relayout(changed); // they glide back to their old cells
-        RefreshMultipliers();
+        RefreshTokenMarks();
         return changed;
     }
 
@@ -588,7 +592,7 @@ public partial class GameManager : Node
             victim.StepsTaken = -1;
 
         _layout.Relayout(new HashSet<Token>(captured));
-        RefreshMultipliers();
+        RefreshTokenMarks();
 
         if (captured.Count > 0)
         {

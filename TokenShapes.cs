@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 // Draws the token shapes. Used by Token (the real pieces) and by BoardManager
 // (the small marker in each house showing which shape a color uses):
-//   Red = pawn, Green = diamond, Yellow = star, Blue = orb
+//   Red = pawn, Green = diamond, Yellow = heart, Blue = orb
 public static class TokenShapes
 {
     public static Color BodyColor(string playerColor)
@@ -31,7 +31,7 @@ public static class TokenShapes
         {
             case "Red": DrawPawn(c, o, r, k, body, dark, light); break;
             case "Green": DrawDiamond(c, o, r, k, body, dark, light); break;
-            case "Yellow": DrawStarShape(c, o, r, k, body, light); break;
+            case "Yellow": DrawHeart(c, o, r, k, body, light); break;
             default: DrawOrb(c, o, r, k, body, dark, light); break;
         }
     }
@@ -87,28 +87,40 @@ public static class TokenShapes
             new Color(1, 1, 1, 0.6f));
     }
 
-    // Yellow: a five-point star
-    private static void DrawStarShape(CanvasItem c, Vector2 o, float r, float k, Color body, Color light)
+    // Yellow: a heart (a different silhouette from the board's star squares)
+    private static void DrawHeart(CanvasItem c, Vector2 o, float r, float k, Color body, Color light)
     {
-        Vector2 center = o + new Vector2(0, -r * 0.05f);
-        var points = new Vector2[10];
+        const int n = 40;
+        float scale = r * 0.95f / 16f;
 
-        for (int i = 0; i < 10; i++)
+        // The classic heart curve. Its middle sits a bit below the origin, so lift it.
+        Vector2 center = o + new Vector2(0, -r * 0.16f);
+        var points = new Vector2[n];
+
+        for (int i = 0; i < n; i++)
         {
-            float angle = Mathf.Pi * i / 5f - Mathf.Pi / 2f;
-            float radius = i % 2 == 0 ? r * 1.22f : r * 0.55f;
-            points[i] = center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+            float t = Mathf.Tau * i / n;
+            float x = 16f * Mathf.Pow(Mathf.Sin(t), 3f);
+            float y = 13f * Mathf.Cos(t) - 5f * Mathf.Cos(2f * t)
+                    - 2f * Mathf.Cos(3f * t) - Mathf.Cos(4f * t);
+
+            points[i] = center + new Vector2(x, -y) * scale;
         }
 
         c.DrawColoredPolygon(points, body);
 
-        // Lighter smaller star in the middle
-        var inner = new Vector2[10];
-        for (int i = 0; i < 10; i++)
-            inner[i] = center + (points[i] - center) * 0.5f;
+        // Lighter smaller heart inside, nudged up
+        var inner = new Vector2[n];
+        for (int i = 0; i < n; i++)
+            inner[i] = center + new Vector2(0, -r * 0.10f) + (points[i] - center) * 0.52f;
         c.DrawColoredPolygon(inner, new Color(light.R, light.G, light.B, 0.75f));
 
         c.DrawPolyline(Close(points), Colors.Black, 2.4f * k, true);
+
+        // Shine on the upper-left lobe
+        c.DrawColoredPolygon(
+            Ellipse(center + new Vector2(-r * 0.55f, -r * 0.42f), r * 0.18f, r * 0.11f),
+            new Color(1, 1, 1, 0.6f));
     }
 
     // Blue: a solid glossy ball with a bright core (clearly not a hollow yard socket)

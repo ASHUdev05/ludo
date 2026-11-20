@@ -12,17 +12,10 @@ public partial class BoardManager : Node2D
 
     // Grows the board to fill the screen width
     [Export] public bool FitToViewport = true;
-    [Export] public float BoardMargin = 24f;
+    [Export] public float BoardMargin = 10f;
 
-    // How wide a track cell is (across the track) compared with its length (along the track).
-    // 1.0 = square cells and big yards. Higher = wider path cells and smaller yards.
-    [Export] public float TrackWidthRatio = 1.35f;
-
-    // Board height / board width (1 = square). Limited by the screen height.
-    [Export] public float BoardHeightRatio = 1.0f;
-
-    // Height kept free for dice, labels and status text
-    [Export] public float ReservedHeight = 760f;
+    // Height kept free for the dice above and below the board
+    [Export] public float ReservedHeight = 540f;
 
     // Column widths and row heights. Columns/rows 6-8 are the track arms (wide),
     // the other 12 belong to the yards (narrow).
@@ -110,22 +103,23 @@ public partial class BoardManager : Node2D
     {
         Vector2 view = GetViewportRect().Size;
 
-        // Board size: fill the screen width, then limit the height to what the screen allows
+        // The board is a square: as wide as the screen allows (minus a small margin),
+        // or as tall as the screen allows if the window is short
         if (FitToViewport)
-            BoardSizePixels = Mathf.Max(300f, view.X - 2f * BoardMargin);
+        {
+            BoardSizePixels = Mathf.Max(300f,
+                Mathf.Min(view.X - 2f * BoardMargin, view.Y - ReservedHeight));
+        }
 
         _boardW = BoardSizePixels;
-        _boardH = _boardW * Mathf.Max(0.5f, BoardHeightRatio);
+        _boardH = BoardSizePixels;
 
-        if (FitToViewport)
-            _boardH = Mathf.Min(_boardH, Mathf.Max(300f, view.Y - ReservedHeight));
-
-        // 12 yard columns/rows of size y plus 3 track columns/rows of size r*y fill the board
-        float r = Mathf.Max(1f, TrackWidthRatio);
-        _yardCol = _boardW / (12f + 3f * r);
-        _yardRow = _boardH / (12f + 3f * r);
-        float armCol = _yardCol * r;
-        float armRow = _yardRow * r;
+        // 15 equal columns and rows, so every cell is a square
+        float cell = _boardW / 15f;
+        _yardCol = cell;
+        _yardRow = cell;
+        float armCol = cell;
+        float armRow = cell;
 
         for (int i = 0; i < 15; i++)
         {
@@ -234,6 +228,25 @@ public partial class BoardManager : Node2D
         }
 
         QueueRedraw();
+    }
+
+    // Cells holding a blockade: path index -> color of the team holding it
+    private readonly Dictionary<int, string> _blockades = new();
+
+    public void SetBlockades(IEnumerable<(int Index, string Color)> blockades)
+    {
+        _blockades.Clear();
+
+        foreach (var b in blockades)
+            _blockades[b.Index] = b.Color;
+
+        QueueRedraw();
+    }
+
+    // True for the star cells and start cells (indices into the 52-cell loop)
+    public bool IsSafeIndex(int index)
+    {
+        return _safePathIndices.Contains(index);
     }
 
     // Cells where a token can never be captured: the 4 start cells and the
@@ -362,6 +375,7 @@ public partial class BoardManager : Node2D
         DrawCenter();
         DrawSymbols();
         DrawGridLines();
+        DrawBlockades();
 
         DrawRect(RectBetween(0, 0, 15, 15), Colors.Black, false, 3f);
     }
@@ -569,6 +583,19 @@ public partial class BoardManager : Node2D
         };
 
         DrawPolyline(outline, Colors.Black, 1.5f, true);
+    }
+
+    // A thick colored frame around each cell that holds a blockade
+    private void DrawBlockades()
+    {
+        foreach (var pair in _blockades)
+        {
+            Vector2I coord = _mainLoopCoords[pair.Key];
+            Rect2 rect = CellRect(coord.X, coord.Y).Grow(-3f);
+
+            DrawRect(rect, Colors.Black, false, 9f);
+            DrawRect(rect, TokenShapes.BodyColor(pair.Value), false, 5f);
+        }
     }
 
     private void DrawGridLines()

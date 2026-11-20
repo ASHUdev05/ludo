@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 
 // A Ludo token. The shape depends on the color (see TokenShapes):
-//   Red = pawn, Green = diamond, Yellow = star, Blue = orb
+//   Red = pawn, Green = diamond, Yellow = heart, Blue = orb
 public partial class Token : Area2D
 {
     [Export] public string PlayerColor = "Red";

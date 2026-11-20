@@ -70,18 +70,47 @@ public class BotBrain
         // Reaching a safe square
         if (to <= 50 && _board.IsSafe(color, to)) score += 25f;
 
+        // Blockades: forming one is good, breaking one is slightly bad
+        if (to <= 50 && !_board.IsSafe(color, to) && TeammatesAt(t, to) > 0) score += 20f;
+        if (from >= 0 && from <= 50 && !_board.IsSafe(color, from) && TeammatesAt(t, from) > 0) score -= 10f;
+
         // Danger: run away from threats, avoid walking into them
-        if (from >= 0 && IsThreatened(color, from)) score += 30f + from * 0.2f;
-        if (IsThreatened(color, to)) score -= 35f;
+        if (from >= 0 && IsThreatened(t, from)) score += 30f + from * 0.2f;
+        if (IsThreatened(t, to)) score -= 35f;
 
         return score;
     }
 
-    // True if an opposing token could land on this cell with a single roll (1-6),
-    // taking that token's own multiplier into account
-    private bool IsThreatened(string color, int steps)
+    // How many other tokens of this token's team stand on the cell for the given step count
+    private int TeammatesAt(Token self, int steps)
     {
+        int cell = _board.GetPathIndex(self.PlayerColor, steps);
+        if (cell < 0) return 0;
+
+        int count = 0;
+
+        foreach (Token other in _board.AllTokens)
+        {
+            if (other == self) continue;
+            if (!_config.SameTeam(self.PlayerColor, other.PlayerColor)) continue;
+
+            if (_board.GetPathIndex(other.PlayerColor, other.StepsTaken) == cell)
+                count++;
+        }
+
+        return count;
+    }
+
+    // True if an opposing token could land on this token's cell with a single roll (1-6),
+    // taking multipliers and blockades into account
+    private bool IsThreatened(Token self, int steps)
+    {
+        string color = self.PlayerColor;
+
         if (_board.IsSafe(color, steps)) return false;
+
+        // Standing with a teammate forms a blockade, which can't be captured
+        if (TeammatesAt(self, steps) > 0) return false;
 
         int loop = _board.MainPathPositions.Count;
         int cell = _board.GetPathIndex(color, steps);
@@ -100,8 +129,10 @@ public class BotBrain
                 && distance % multiplier == 0
                 && distance / multiplier <= 6;
 
-            // It must also still be on the shared track when it gets there
-            if (reachable && other.StepsTaken + distance <= 50)
+            // It must still be on the shared track when it gets there, and nothing may block its way
+            if (reachable
+                && other.StepsTaken + distance <= 50
+                && !_rules.PathBlocked(other, other.StepsTaken + distance))
                 return true;
         }
 

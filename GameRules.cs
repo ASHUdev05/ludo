@@ -48,8 +48,78 @@ public class GameRules
     public bool CanMove(Token t, int dice)
     {
         if (t.IsInYard) return dice == 6;               // need a 6 to leave the yard
-        if (IsSupermatch) return !t.IsFinished;         // overshooting just finishes at home
-        return t.StepsTaken + dice <= HomeSteps;        // can't overshoot home
+        if (t.IsFinished) return false;
+
+        // Can't overshoot home (Supermatch just finishes at home instead)
+        if (!IsSupermatch && t.StepsTaken + dice > HomeSteps) return false;
+
+        // Can't land on or pass through an opposing blockade
+        return !PathBlocked(t, TargetSteps(t, dice));
+    }
+
+    // =====================================
+    // BLOCKADES
+    // =====================================
+    // Two or more tokens of the same team on one cell form a blockade: opponents can't land on
+    // it or pass through it, and its tokens can't be captured. Stars and start squares are
+    // shared safe cells, so they never hold blockades.
+
+    private string TeamKey(string color)
+    {
+        if (!_config.IsTeams) return color;
+        return color == "Red" || color == "Yellow" ? "Team1" : "Team2";
+    }
+
+    // Does the shared-track cell hold a blockade that stops a token of "moverColor"?
+    public bool IsBlockedCell(string moverColor, int pathIndex)
+    {
+        if (pathIndex < 0 || _board.IsSafeIndex(pathIndex)) return false;
+
+        var counts = new Dictionary<string, int>();
+
+        foreach (Token t in _board.AllTokens)
+        {
+            if (_board.GetPathIndex(t.PlayerColor, t.StepsTaken) != pathIndex) continue;
+            if (_config.SameTeam(moverColor, t.PlayerColor)) continue; // your own team never blocks you
+
+            string team = TeamKey(t.PlayerColor);
+            counts[team] = counts.GetValueOrDefault(team) + 1;
+        }
+
+        return counts.Values.Any(count => count >= 2);
+    }
+
+    // True if any cell the token would enter on its way to targetSteps holds an opposing blockade
+    public bool PathBlocked(Token t, int targetSteps)
+    {
+        for (int s = t.StepsTaken + 1; s <= targetSteps; s++)
+        {
+            int cell = _board.GetPathIndex(t.PlayerColor, s);
+
+            if (IsBlockedCell(t.PlayerColor, cell))
+                return true;
+        }
+
+        return false;
+    }
+
+    // Every blockade on the board: shared-track cell index and the color holding it
+    public List<(int Index, string Color)> GetBlockades()
+    {
+        var result = new List<(int Index, string Color)>();
+
+        var groups = _board.AllTokens
+            .Select(t => (Token: t, Cell: _board.GetPathIndex(t.PlayerColor, t.StepsTaken)))
+            .Where(x => x.Cell >= 0 && !_board.IsSafeIndex(x.Cell))
+            .GroupBy(x => (x.Cell, Team: TeamKey(x.Token.PlayerColor)));
+
+        foreach (var group in groups)
+        {
+            if (group.Count() >= 2)
+                result.Add((group.Key.Cell, group.First().Token.PlayerColor));
+        }
+
+        return result;
     }
 
     // Step count the token ends on after this roll
