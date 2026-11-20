@@ -3,7 +3,17 @@ using System.Linq;
 
 public enum SeatType { Off, Human, Bot }
 
+// How many players and whether they play in teams
 public enum GameMode { TwoPlayers, ThreePlayers, FourPlayers, Teams }
+
+// Which rules are used
+public enum RuleSet
+{
+    Classic,     // standard Ludo
+    ThreeSixes,  // three 6s in a row void the turn and undo that streak's moves
+    Deathmatch,  // every token starts out on the start square
+    Supermatch   // all tokens out + speed multipliers
+}
 
 // Plain data describing how a game is set up. Not a Godot node.
 public class GameConfig
@@ -18,6 +28,7 @@ public class GameConfig
     public static bool SkipSetup;
 
     public GameMode Mode = GameMode.FourPlayers;
+    public RuleSet Rules = RuleSet.Classic;
 
     public Dictionary<string, SeatType> Seats = new()
     {
@@ -28,6 +39,9 @@ public class GameConfig
     };
 
     public bool IsTeams => Mode == GameMode.Teams;
+
+    // Deathmatch and Supermatch start with every token already on the board
+    public bool AllTokensOut => Rules == RuleSet.Deathmatch || Rules == RuleSet.Supermatch;
 
     public int RequiredPlayers => Mode switch
     {
@@ -55,7 +69,7 @@ public class GameConfig
 
     public GameConfig Clone()
     {
-        var copy = new GameConfig { Mode = Mode };
+        var copy = new GameConfig { Mode = Mode, Rules = Rules };
         foreach (var pair in Seats)
             copy.Seats[pair.Key] = pair.Value;
         return copy;

@@ -185,6 +185,12 @@ public partial class BoardManager : Node2D
         return _tokensNode.ToLocal(ToGlobal(boardPos));
     }
 
+    // Index in the 52-cell loop of a color's start cell
+    public int GetStartIndex(string color)
+    {
+        return _startIndices[color];
+    }
+
     // Width and height of the cell a token with this step count stands on
     public Vector2 GetCellSize(string color, int steps)
     {
@@ -439,6 +445,13 @@ public partial class BoardManager : Node2D
             DrawCircle(center, radius, color.Lerp(Colors.White, 0.78f));
             DrawArc(center, radius, 0f, Mathf.Tau, 48, color, 4f, true);
             DrawArc(center, radius * 0.5f, 0f, Mathf.Tau, 32, color.Lerp(Colors.White, 0.45f), 3f, true);
+        }
+
+        // Small marker in the middle of the house showing this color's token shape
+        if (!_inactiveColors.Contains(name))
+        {
+            Vector2 middle = GridPoint(origin.X + 3f, origin.Y + 3f);
+            TokenShapes.Draw(this, name, middle, Mathf.Min(_yardCol, _yardRow) * 0.36f);
         }
     }
 

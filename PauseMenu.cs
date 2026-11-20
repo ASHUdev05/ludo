@@ -2,6 +2,7 @@ using Godot;
 using System;
 
 // Shown while the game is paused: Resume, Restart (rematch), Settings, Main menu.
+// Laid out with anchors, so it is always centered whatever the window size is.
 public partial class PauseMenu : CanvasLayer
 {
     public event Action ResumePressed;
@@ -13,23 +14,21 @@ public partial class PauseMenu : CanvasLayer
         Layer = 30;
         ProcessMode = ProcessModeEnum.Always; // must keep working while the game is paused
 
-        Vector2 view = GetViewport().GetVisibleRect().Size;
-
-        AddChild(new ColorRect
+        var dim = new ColorRect
         {
             Color = new Color(0, 0, 0, 0.75f),
-            Size = view,
             MouseFilter = Control.MouseFilterEnum.Stop
-        });
-
-        var box = new VBoxContainer
-        {
-            Position = new Vector2(view.X / 2f - 350f, view.Y / 2f - 420f),
-            Size = new Vector2(700f, 840f),
-            Alignment = BoxContainer.AlignmentMode.Center
         };
+        AddChild(dim);
+        dim.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+
+        var center = new CenterContainer();
+        AddChild(center);
+        center.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+
+        var box = new VBoxContainer { CustomMinimumSize = new Vector2(700, 0) };
         box.AddThemeConstantOverride("separation", 34);
-        AddChild(box);
+        center.AddChild(box);
 
         var title = new Label
         {
@@ -48,7 +47,7 @@ public partial class PauseMenu : CanvasLayer
         box.AddChild(MakeButton("Main menu", () => MenuPressed?.Invoke()));
     }
 
-    // Escape (or the back button routed as ui_cancel) resumes
+    // Escape resumes
     public override void _UnhandledInput(InputEvent @event)
     {
         if (@event.IsActionPressed("ui_cancel"))

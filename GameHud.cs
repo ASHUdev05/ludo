@@ -2,8 +2,9 @@ using Godot;
 using System;
 using System.Collections.Generic;
 
-// All on-screen controls during a game: one dice + name tag + Auto button per player,
-// the status line and the Pause button. It only reports events; GameManager decides what happens.
+// On-screen controls during a game: one dice + name tag + Auto button per player and the
+// Pause button. There is no status text outside the board; short messages appear as a
+// toast over the middle of the board. It only reports events; GameManager decides what happens.
 public partial class GameHud : CanvasLayer
 {
     public event Action<string> DiceClicked;
@@ -11,10 +12,15 @@ public partial class GameHud : CanvasLayer
     public event Action<string, bool> AutoToggled;
     public event Action PausePressed;
 
+    // Set before Build(). The small name labels next to each dice.
+    public bool ShowTags = true;
+
     private readonly Dictionary<string, DiceButton> _dice = new();
     private readonly Dictionary<string, Label> _tags = new();
     private readonly Dictionary<string, Button> _autoButtons = new();
-    private Label _status;
+
+    private Vector2 _boardCenter;
+    private Vector2 _boardSize;
 
     public DiceButton GetDice(string color) => _dice[color];
     public IEnumerable<DiceButton> AllDice => _dice.Values;
@@ -23,12 +29,14 @@ public partial class GameHud : CanvasLayer
     public void Build(BoardManager board, GameConfig config, IReadOnlyList<string> activeColors,
                       float diceSize, float diceGap)
     {
-        Vector2 view = GetViewport().GetVisibleRect().Size;
         Vector2 boardTopLeft = board.ToGlobal(board.BoardTopLeft);
         float top = boardTopLeft.Y;
         float bottom = top + board.BoardHeight;
         float midX = boardTopLeft.X + board.BoardWidth / 2f;
         float midY = top + board.BoardHeight / 2f;
+
+        _boardSize = new Vector2(board.BoardWidth, board.BoardHeight);
+        _boardCenter = new Vector2(midX, midY);
 
         foreach (string color in activeColors)
         {
@@ -59,7 +67,8 @@ public partial class GameHud : CanvasLayer
                 Position = new Vector2(
                     yardCenter.X - 180f,
                     onTop ? diceTop - 38f : diceTop + diceSize + 6f),
-                HorizontalAlignment = HorizontalAlignment.Center
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Visible = ShowTags
             };
             tag.AddThemeFontSizeOverride("font_size", 26);
             tag.AddThemeColorOverride("font_color", DiceButton.ColorFor(color));
@@ -93,34 +102,44 @@ public partial class GameHud : CanvasLayer
             }
         }
 
-        // Status line above the top dice
-        _status = new Label
-        {
-            Position = new Vector2(0, Mathf.Max(10f, top - diceGap - diceSize - 160f)),
-            Size = new Vector2(view.X, 70f),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        _status.AddThemeFontSizeOverride("font_size", 36);
-        AddChild(_status);
-
-        // Pause button, top right
+        // Pause button, pinned to the top-right corner of the screen
         var pause = new Button
         {
             Text = "Pause",
-            FocusMode = Control.FocusModeEnum.None,
-            Size = new Vector2(160f, 76f),
-            Position = new Vector2(view.X - 160f - 24f, 24f)
+            FocusMode = Control.FocusModeEnum.None
         };
         pause.AddThemeFontSizeOverride("font_size", 32);
         pause.Pressed += () => PausePressed?.Invoke();
         AddChild(pause);
+
+        pause.SetAnchorsPreset(Control.LayoutPreset.TopRight);
+        pause.OffsetLeft = -184f;
+        pause.OffsetRight = -24f;
+        pause.OffsetTop = 24f;
+        pause.OffsetBottom = 100f;
     }
 
-    public void SetStatus(string text, string colorName)
+    // Short message over the middle of the board that fades out by itself
+    public void Toast(string text, string colorName)
     {
-        _status.Text = text;
-        _status.AddThemeColorOverride("font_color", DiceButton.ColorFor(colorName));
+        var label = new Label
+        {
+            Text = text,
+            Size = new Vector2(_boardSize.X, 110f),
+            Position = _boardCenter - new Vector2(_boardSize.X / 2f, 55f),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        label.AddThemeFontSizeOverride("font_size", 56);
+        label.AddThemeColorOverride("font_color", DiceButton.ColorFor(colorName));
+        label.AddThemeColorOverride("font_outline_color", Colors.Black);
+        label.AddThemeConstantOverride("outline_size", 14);
+        AddChild(label);
+
+        var tween = label.CreateTween();
+        tween.TweenProperty(label, "modulate:a", 0f, 0.3f).SetDelay(0.8f);
+        tween.TweenCallback(Callable.From(label.QueueFree));
     }
 
     public void SetTag(string color, string text)

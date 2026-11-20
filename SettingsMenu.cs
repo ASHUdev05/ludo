@@ -1,6 +1,7 @@
 using Godot;
 
 // Full-screen settings overlay. Works from the start screen and from the pause menu.
+// Laid out with anchors, so it is always centered whatever the window size is.
 public partial class SettingsMenu : CanvasLayer
 {
     // Adds a settings screen on top of everything under "parent"
@@ -18,23 +19,21 @@ public partial class SettingsMenu : CanvasLayer
         Layer = 40;
         ProcessMode = ProcessModeEnum.Always; // must keep working while the game is paused
 
-        Vector2 view = GetViewport().GetVisibleRect().Size;
-
-        AddChild(new ColorRect
+        var dim = new ColorRect
         {
             Color = new Color(0.05f, 0.06f, 0.08f, 0.97f),
-            Size = view,
             MouseFilter = Control.MouseFilterEnum.Stop
-        });
-
-        var box = new VBoxContainer
-        {
-            Position = new Vector2(view.X / 2f - 400f, view.Y / 2f - 480f),
-            Size = new Vector2(800f, 960f),
-            Alignment = BoxContainer.AlignmentMode.Center
         };
+        AddChild(dim);
+        dim.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+
+        var center = new CenterContainer();
+        AddChild(center);
+        center.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+
+        var box = new VBoxContainer { CustomMinimumSize = new Vector2(800, 0) };
         box.AddThemeConstantOverride("separation", 30);
-        AddChild(box);
+        center.AddChild(box);
 
         box.AddChild(MakeLabel("Settings", 90, Colors.White));
 

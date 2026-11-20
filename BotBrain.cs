@@ -6,12 +6,14 @@ public class BotBrain
 {
     private readonly BoardManager _board;
     private readonly GameConfig _config;
+    private readonly GameRules _rules;
     private readonly RandomNumberGenerator _rng;
 
-    public BotBrain(BoardManager board, GameConfig config, RandomNumberGenerator rng)
+    public BotBrain(BoardManager board, GameConfig config, GameRules rules, RandomNumberGenerator rng)
     {
         _board = board;
         _config = config;
+        _rules = rules;
         _rng = rng;
     }
 
@@ -39,7 +41,7 @@ public class BotBrain
     {
         string color = t.PlayerColor;
         int from = t.StepsTaken;
-        int to = t.IsInYard ? 0 : from + dice;
+        int to = _rules.TargetSteps(t, dice);
 
         float score = 0f;
 
@@ -75,7 +77,8 @@ public class BotBrain
         return score;
     }
 
-    // True if an opposing token could land on this cell with a single roll (1-6)
+    // True if an opposing token could land on this cell with a single roll (1-6),
+    // taking that token's own multiplier into account
     private bool IsThreatened(string color, int steps)
     {
         if (_board.IsSafe(color, steps)) return false;
@@ -91,9 +94,14 @@ public class BotBrain
             if (otherCell < 0) continue;
 
             int distance = (cell - otherCell + loop) % loop;
+            int multiplier = _rules.Multiplier(other);
+
+            bool reachable = distance >= multiplier
+                && distance % multiplier == 0
+                && distance / multiplier <= 6;
 
             // It must also still be on the shared track when it gets there
-            if (distance >= 1 && distance <= 6 && other.StepsTaken + distance <= 50)
+            if (reachable && other.StepsTaken + distance <= 50)
                 return true;
         }
 

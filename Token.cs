@@ -2,13 +2,10 @@ using Godot;
 using System;
 using System.Collections.Generic;
 
-// A Ludo token. Each color has its own shape so players can tell them apart
-// without relying on color alone:
+// A Ludo token. The shape depends on the color (see TokenShapes):
 //   Red = pawn, Green = diamond, Yellow = star, Blue = orb
 public partial class Token : Area2D
 {
-    private enum Shape { Pawn, Diamond, Star, Orb }
-
     [Export] public string PlayerColor = "Red";
     [Export] public int TokenId = 0;
 
@@ -27,6 +24,7 @@ public partial class Token : Area2D
     private bool _highlighted = false;
     private float _ringAngle = 0f;
     private float _lift = 0f; // how far the token is raised while hopping
+    private int _multiplier = 1;
 
     // One tween per kind of motion, so a new move always replaces the old one
     private Tween _moveTween;
@@ -44,28 +42,20 @@ public partial class Token : Area2D
         }
     }
 
+    // Supermatch speed multiplier. Shown as a small badge when above 1.
+    public int Multiplier
+    {
+        get => _multiplier;
+        set
+        {
+            if (_multiplier == value) return;
+            _multiplier = value;
+            QueueRedraw();
+        }
+    }
+
     // GameManager listens to this
     public event Action<Token> OnTokenClicked;
-
-    private Shape Kind => PlayerColor switch
-    {
-        "Red" => Shape.Pawn,
-        "Green" => Shape.Diamond,
-        "Yellow" => Shape.Star,
-        _ => Shape.Orb
-    };
-
-    private Color GetColorCode()
-    {
-        return PlayerColor switch
-        {
-            "Red" => new Color(0.95f, 0.12f, 0.12f),
-            "Green" => new Color(0.10f, 0.65f, 0.20f),
-            "Yellow" => new Color(1.00f, 0.80f, 0.05f),
-            "Blue" => new Color(0.10f, 0.50f, 0.95f),
-            _ => Colors.White
-        };
-    }
 
     public override void _Ready()
     {
@@ -102,10 +92,6 @@ public partial class Token : Area2D
         float r = Radius;
         float k = r / 22f;
 
-        Color body = GetColorCode();
-        Color dark = body.Darkened(0.45f);
-        Color light = body.Lightened(0.35f);
-
         // Dashed ring on the ground around movable tokens
         if (_highlighted)
         {
@@ -116,157 +102,41 @@ public partial class Token : Area2D
         // Ground shadow (shrinks while the token is in the air)
         float shrink = 1f - Mathf.Clamp(_lift / (r * 1.6f), 0f, 0.35f);
         DrawColoredPolygon(
-            Ellipse(new Vector2(0, r * 0.98f), r * 0.95f * shrink, r * 0.26f * shrink),
+            TokenShapes.Ellipse(new Vector2(0, r * 0.98f), r * 0.95f * shrink, r * 0.26f * shrink),
             new Color(0, 0, 0, 0.35f));
 
         // Everything below is lifted together while hopping
         DrawSetTransform(new Vector2(0, -_lift), 0f, Vector2.One);
 
-        switch (Kind)
-        {
-            case Shape.Pawn: DrawPawn(r, k, body, dark, light); break;
-            case Shape.Diamond: DrawDiamond(r, k, body, dark, light); break;
-            case Shape.Star: DrawStarToken(r, k, body, dark, light); break;
-            default: DrawOrb(r, k, body, dark, light); break;
-        }
+        TokenShapes.Draw(this, PlayerColor, Vector2.Zero, r);
+
+        if (_multiplier > 1)
+            DrawBadge(r, k);
 
         DrawSetTransform(Vector2.Zero, 0f, Vector2.One);
     }
 
-    // Red: round head, tapered body, wide foot
-    private void DrawPawn(float r, float k, Color body, Color dark, Color light)
+    // Small "x2" / "x3" / "x4" badge at the top right of the token
+    private void DrawBadge(float r, float k)
     {
-        // Foot
-        Vector2[] foot = Ellipse(new Vector2(0, r * 0.92f), r * 0.88f, r * 0.24f);
-        DrawColoredPolygon(foot, dark);
-        DrawPolyline(Close(foot), Colors.Black, 2.2f * k, true);
+        Vector2 center = new Vector2(r * 0.85f, -r * 1.0f);
+        float badgeRadius = r * 0.58f;
 
-        // Tapered body
-        Vector2[] torso = BuildBody(r);
-        DrawColoredPolygon(torso, body);
-        DrawPolyline(Close(torso), Colors.Black, 2.2f * k, true);
-
-        // Collar
-        Vector2[] collar = Ellipse(new Vector2(0, -r * 0.28f), r * 0.44f, r * 0.14f);
-        DrawColoredPolygon(collar, light);
-        DrawPolyline(Close(collar), Colors.Black, 1.8f * k, true);
-
-        // Head
-        Vector2 head = new Vector2(0, -r * 0.72f);
-        DrawCircle(head, r * 0.56f, light);
-        DrawArc(head, r * 0.56f, 0f, Mathf.Tau, 32, Colors.Black, 2.2f * k, true);
-
-        // Shine
-        DrawColoredPolygon(
-            Ellipse(head + new Vector2(-r * 0.18f, -r * 0.20f), r * 0.17f, r * 0.11f),
-            new Color(1, 1, 1, 0.55f));
-    }
-
-    // Green: a cut gem with light and dark facets
-    private void DrawDiamond(float r, float k, Color body, Color dark, Color light)
-    {
-        Vector2 top = new Vector2(0, -r * 1.15f);
-        Vector2 right = new Vector2(r * 0.95f, -r * 0.10f);
-        Vector2 bottom = new Vector2(0, r * 1.00f);
-        Vector2 left = new Vector2(-r * 0.95f, -r * 0.10f);
-        Vector2 mid = new Vector2(0, -r * 0.10f);
-
-        DrawColoredPolygon(new[] { top, right, bottom, left }, body);
-        DrawColoredPolygon(new[] { top, left, mid }, light);     // upper-left facet
-        DrawColoredPolygon(new[] { right, bottom, mid }, dark);  // lower-right facet
-
-        DrawLine(left, right, new Color(0, 0, 0, 0.35f), 1.5f * k, true);
-        DrawPolyline(new[] { top, right, bottom, left, top }, Colors.Black, 2.4f * k, true);
-
-        // Shine
-        DrawColoredPolygon(
-            Ellipse(new Vector2(-r * 0.28f, -r * 0.55f), r * 0.14f, r * 0.09f),
-            new Color(1, 1, 1, 0.6f));
-    }
-
-    // Yellow: a five-point star
-    private void DrawStarToken(float r, float k, Color body, Color dark, Color light)
-    {
-        Vector2 center = new Vector2(0, -r * 0.05f);
-        var points = new Vector2[10];
-
-        for (int i = 0; i < 10; i++)
+        Color fill = _multiplier switch
         {
-            float angle = Mathf.Pi * i / 5f - Mathf.Pi / 2f;
-            float radius = i % 2 == 0 ? r * 1.22f : r * 0.55f;
-            points[i] = center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
-        }
+            2 => new Color(1.00f, 0.92f, 0.35f),
+            3 => new Color(1.00f, 0.60f, 0.15f),
+            _ => new Color(0.95f, 0.25f, 0.25f)
+        };
 
-        DrawColoredPolygon(points, body);
+        DrawCircle(center, badgeRadius, fill);
+        DrawArc(center, badgeRadius, 0f, Mathf.Tau, 20, Colors.Black, 2f * k, true);
 
-        // Lighter smaller star in the middle
-        var inner = new Vector2[10];
-        for (int i = 0; i < 10; i++)
-            inner[i] = center + (points[i] - center) * 0.5f;
-        DrawColoredPolygon(inner, new Color(light.R, light.G, light.B, 0.75f));
+        Font font = ThemeDB.FallbackFont;
+        int fontSize = Mathf.Max(8, (int)(badgeRadius * 1.15f));
+        Vector2 pos = new Vector2(center.X - badgeRadius, center.Y + fontSize * 0.35f);
 
-        DrawPolyline(Close(points), Colors.Black, 2.4f * k, true);
-    }
-
-    // Blue: a solid glossy ball with a bright core (clearly not a hollow yard socket)
-    private void DrawOrb(float r, float k, Color body, Color dark, Color light)
-    {
-        float radius = r * 1.0f;
-
-        DrawCircle(Vector2.Zero, radius, dark);
-        DrawCircle(new Vector2(0, -radius * 0.06f), radius * 0.9f, body);
-        DrawCircle(new Vector2(0, -radius * 0.06f), radius * 0.5f, light);
-        DrawArc(Vector2.Zero, radius, 0f, Mathf.Tau, 32, Colors.Black, 2.6f * k, true);
-        DrawArc(new Vector2(0, -radius * 0.06f), radius * 0.5f, 0f, Mathf.Tau, 24,
-            new Color(0, 0, 0, 0.3f), 1.4f * k, true);
-
-        // Shine
-        DrawColoredPolygon(
-            Ellipse(new Vector2(-radius * 0.38f, -radius * 0.50f), radius * 0.20f, radius * 0.12f),
-            new Color(1, 1, 1, 0.65f));
-    }
-
-    private Vector2[] BuildBody(float r)
-    {
-        const int n = 14;
-        var pts = new List<Vector2>();
-
-        // Right side from the foot up to the neck: wide at the bottom, narrow at the top
-        for (int i = 0; i <= n; i++)
-        {
-            float t = i / (float)n;
-            float y = Mathf.Lerp(0.92f, -0.30f, t) * r;
-            float halfWidth = (0.26f + 0.60f * Mathf.Pow(1f - t, 2.2f)) * r;
-            pts.Add(new Vector2(halfWidth, y));
-        }
-
-        // Mirror back down the left side
-        for (int i = n; i >= 0; i--)
-            pts.Add(new Vector2(-pts[i].X, pts[i].Y));
-
-        return pts.ToArray();
-    }
-
-    private static Vector2[] Ellipse(Vector2 center, float rx, float ry)
-    {
-        const int n = 24;
-        var pts = new Vector2[n];
-
-        for (int i = 0; i < n; i++)
-        {
-            float a = Mathf.Tau * i / n;
-            pts[i] = center + new Vector2(Mathf.Cos(a) * rx, Mathf.Sin(a) * ry);
-        }
-
-        return pts;
-    }
-
-    private static Vector2[] Close(Vector2[] pts)
-    {
-        var closed = new Vector2[pts.Length + 1];
-        pts.CopyTo(closed, 0);
-        closed[pts.Length] = pts[0];
-        return closed;
+        DrawString(font, pos, $"x{_multiplier}", HorizontalAlignment.Center, badgeRadius * 2f, fontSize, Colors.Black);
     }
 
     private void DrawDashedRing(float radius, Color color, float width)

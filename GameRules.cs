@@ -10,17 +10,54 @@ public class GameRules
 
     private readonly BoardManager _board;
     private readonly GameConfig _config;
+    private readonly IReadOnlyList<string> _activeColors;
 
-    public GameRules(BoardManager board, GameConfig config)
+    public GameRules(BoardManager board, GameConfig config, IReadOnlyList<string> activeColors)
     {
         _board = board;
         _config = config;
+        _activeColors = activeColors;
+    }
+
+    private bool IsSupermatch => _config.Rules == RuleSet.Supermatch;
+
+    // Supermatch: a token's speed multiplier. It starts at x1 and goes up by one each time
+    // the token reaches another player's start square (x2, x3, x4...). Always x1 otherwise.
+    public int Multiplier(Token t)
+    {
+        if (!IsSupermatch || t.IsInYard) return 1;
+
+        int loop = _board.MainPathPositions.Count;
+        int myStart = _board.GetStartIndex(t.PlayerColor);
+        int multiplier = 1;
+
+        foreach (string other in _activeColors)
+        {
+            if (other == t.PlayerColor) continue;
+
+            // How many steps along its own path this token reaches that player's start square
+            int offset = (_board.GetStartIndex(other) - myStart + loop) % loop;
+
+            if (t.StepsTaken >= offset)
+                multiplier++;
+        }
+
+        return multiplier;
     }
 
     public bool CanMove(Token t, int dice)
     {
         if (t.IsInYard) return dice == 6;               // need a 6 to leave the yard
+        if (IsSupermatch) return !t.IsFinished;         // overshooting just finishes at home
         return t.StepsTaken + dice <= HomeSteps;        // can't overshoot home
+    }
+
+    // Step count the token ends on after this roll
+    public int TargetSteps(Token t, int dice)
+    {
+        if (t.IsInYard) return 0;
+
+        return Math.Min(HomeSteps, t.StepsTaken + dice * Multiplier(t));
     }
 
     // The tokens a player may move. In team games, a player who has brought all

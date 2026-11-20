@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 
 // End-of-game overlay: winner title, final standings, confetti, Rematch / Main menu.
+// Laid out with anchors, so it is always centered whatever the window size is.
 public partial class WinScreen : CanvasLayer
 {
     public event Action RematchPressed;
@@ -26,26 +27,22 @@ public partial class WinScreen : CanvasLayer
         var dim = new ColorRect
         {
             Color = new Color(0, 0, 0, 0),
-            Size = view,
             MouseFilter = Control.MouseFilterEnum.Stop
         };
         AddChild(dim);
+        dim.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         dim.CreateTween().TweenProperty(dim, "color:a", 0.65f, 0.3f);
 
         SpawnConfetti(view);
 
-        // Centered panel: title, standings, buttons
-        var panel = new VBoxContainer
-        {
-            Size = new Vector2(view.X, 800f),
-            Position = new Vector2(0, view.Y / 2f - 400f),
-            Alignment = BoxContainer.AlignmentMode.Center
-        };
+        var center = new CenterContainer();
+        AddChild(center);
+        center.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+
+        var panel = new VBoxContainer { CustomMinimumSize = new Vector2(800, 0) };
         panel.AddThemeConstantOverride("separation", 36);
-        panel.PivotOffset = panel.Size / 2f;
-        panel.Scale = new Vector2(0.5f, 0.5f);
         panel.Modulate = new Color(1, 1, 1, 0);
-        AddChild(panel);
+        center.AddChild(panel);
 
         var title = new Label
         {
@@ -76,13 +73,8 @@ public partial class WinScreen : CanvasLayer
         panel.AddChild(MakeButton("Rematch", () => RematchPressed?.Invoke()));
         panel.AddChild(MakeButton("Main menu", () => MenuPressed?.Invoke()));
 
-        // Pop-in animation
-        var pop = panel.CreateTween();
-        pop.SetParallel(true);
-        pop.TweenProperty(panel, "scale", Vector2.One, 0.4f)
-            .SetTrans(Tween.TransitionType.Back)
-            .SetEase(Tween.EaseType.Out);
-        pop.TweenProperty(panel, "modulate:a", 1f, 0.25f);
+        // Fade in
+        panel.CreateTween().TweenProperty(panel, "modulate:a", 1f, 0.35f);
     }
 
     private static string Ordinal(int n) => n switch

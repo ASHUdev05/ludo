@@ -6,7 +6,8 @@ using System.Linq;
 // Coordinates a game: setup, turn flow, dice, moves, ranks, pause and rematch.
 // The details live in smaller classes:
 //   GameRules (rules), BotBrain (bot choices), TokenLayout (where tokens rest),
-//   GameHud (dice and labels), WinScreen, PauseMenu, SettingsMenu, Sparkles, SoundManager.
+//   GameHud (dice and labels), WinScreen, PauseMenu, SettingsMenu, RulesScreen,
+//   Sparkles, SoundManager.
 public partial class GameManager : Node
 {
     private enum State { Setup, WaitingForRoll, Rolling, WaitingForMove, Busy, GameOver }
@@ -23,12 +24,11 @@ public partial class GameManager : Node
     // Bringing a token all the way home gives another turn
     [Export] public bool ExtraTurnOnHome = true;
 
-    // Three sixes in a row: the third is void, the turn is lost, and the moves
-    // made with the first two sixes are undone
-    [Export] public bool ThreeSixesLoseTurn = true;
-
     // Chance of a 6 relative to each other face (1.0 = fair die, 2.0 = about 29% sixes)
     [Export] public float SixWeight = 2.0f;
+
+    // Show the small name labels next to each dice
+    [Export] public bool ShowNameTags = true;
 
     // Pacing (seconds)
     [Export] public float BotRollDelay = 0.45f;
@@ -61,6 +61,12 @@ public partial class GameManager : Node
 
     // Bumped when this node leaves the tree, so delayed callbacks from an old game do nothing
     private int _epoch = 0;
+
+    // Set when the app goes to the background; the pause menu opens once it is back
+    private bool _pauseWhenBack = false;
+
+    // Three Sixes mode only
+    private bool ThreeSixesActive => _config.Rules == RuleSet.ThreeSixes;
 
     private string CurrentColor => _activeOrder[_currentIndex];
 
@@ -160,11 +166,11 @@ public partial class GameManager : Node
             if (config.Seats[color] == SeatType.Off)
                 Board.RemoveColor(color);
 
-        _rules = new GameRules(Board, _config);
-        _bot = new BotBrain(Board, _config, _rng);
+        _rules = new GameRules(Board, _config, _activeOrder);
+        _bot = new BotBrain(Board, _config, _rules, _rng);
         _layout = new TokenLayout(Board);
 
-        _hud = new GameHud();
+        _hud = new GameHud { ShowTags = ShowNameTags };
         AddChild(_hud);
         _hud.Build(Board, _config, _activeOrder, DiceSize, DiceGap);
         _hud.DiceClicked += OnDiceClicked;
@@ -178,9 +184,35 @@ public partial class GameManager : Node
         foreach (Token token in Board.AllTokens)
             token.OnTokenClicked += OnTokenClicked;
 
+        // Deathmatch / Supermatch: every token starts out on its start square
+        if (_config.AllTokensOut)
+        {
+            foreach (Token t in Board.AllTokens)
+            {
+                t.StepsTaken = 0;
+                t.Position = Board.GetTokenLocalPosition(t.PlayerColor, 0);
+            }
+
+            _layout.Relayout();
+        }
+
+        RefreshMultipliers();
+
         _ranks.Clear();
         _currentIndex = 0;
-        StartTurn();
+        _state = State.Setup;
+
+        // Special modes explain their rules first; the game begins when the player taps "Let's play"
+        if (_config.Rules != RuleSet.Classic)
+        {
+            var rulesScreen = new RulesScreen { Rules = _config.Rules };
+            rulesScreen.Closed += StartTurn;
+            AddChild(rulesScreen);
+        }
+        else
+        {
+            StartTurn();
+        }
     }
 
     private void UpdateTag(string color)
@@ -198,7 +230,12 @@ public partial class GameManager : Node
         _hud.SetTag(color, $"{color} ({who}){team}{rank}");
     }
 
-    private void SetStatus(string text) => _hud.SetStatus(text, CurrentColor);
+    // Supermatch: update the "x2 / x3 / x4" badges
+    private void RefreshMultipliers()
+    {
+        foreach (Token t in Board.AllTokens)
+            t.Multiplier = _rules.Multiplier(t);
+    }
 
     // =====================================
     // PAUSE, REMATCH, MENU
@@ -209,12 +246,24 @@ public partial class GameManager : Node
         // Android back button: pause instead of quitting
         if (what == NotificationWMGoBackRequest)
         {
-            TogglePause();
+            if (IsInsideTree()) TogglePause();
         }
-        // Switching to another app pauses the game
+        // Leaving the app (for example the screen turns off): remember to pause,
+        // but open the menu only once the app is back and has its real size again
         else if (what == NotificationApplicationFocusOut)
         {
-            if (IsPlaying && !GetTree().Paused) PauseGame();
+            if (IsInsideTree() && IsPlaying && !GetTree().Paused)
+                _pauseWhenBack = true;
+        }
+        else if (what == NotificationApplicationFocusIn)
+        {
+            if (_pauseWhenBack)
+            {
+                _pauseWhenBack = false;
+
+                if (IsInsideTree() && IsPlaying && !GetTree().Paused)
+                    PauseGame();
+            }
         }
     }
 
@@ -290,14 +339,7 @@ public partial class GameManager : Node
             _hud.GetDice(color).CanRoll = !IsBot(color);
 
             if (on)
-            {
-                SetStatus($"{color} (auto) is thinking...");
                 Delay(BotRollDelay, () => BotRollTick(color));
-            }
-            else
-            {
-                SetStatus($"{color}'s turn - tap your dice");
-            }
         }
         else if (_state == State.WaitingForMove && on)
         {
@@ -322,13 +364,11 @@ public partial class GameManager : Node
         if (IsBot(color))
         {
             dice.CanRoll = false; // humans can't roll for a bot
-            SetStatus($"{color} (bot) is thinking...");
             Delay(BotRollDelay, () => BotRollTick(color));
         }
         else
         {
             dice.CanRoll = true;
-            SetStatus($"{color}'s turn - tap your dice");
         }
     }
 
@@ -340,7 +380,6 @@ public partial class GameManager : Node
         if (!IsBot(color))
         {
             _hud.GetDice(color).CanRoll = true;
-            SetStatus($"{color}'s turn - tap your dice");
             return;
         }
 
@@ -376,7 +415,6 @@ public partial class GameManager : Node
         _diceValue = RollDie();
         _hud.GetDice(color).Roll(_diceValue);
         _sound.PlayDice();
-        SetStatus($"{color} is rolling...");
     }
 
     // Faces 1-5 have weight 1; a 6 has weight SixWeight, so sixes come up more often
@@ -393,29 +431,32 @@ public partial class GameManager : Node
     {
         if (_state != State.Rolling || color != CurrentColor) return;
 
-        // Track the streak. Remember the board before the first six so the whole
-        // streak can be revoked if a third six follows.
-        _sixStreak = _diceValue == 6 ? _sixStreak + 1 : 0;
-
-        if (_sixStreak == 1)
-            _sixSnapshot = Board.AllTokens.ToDictionary(t => t, t => t.StepsTaken);
-        else if (_sixStreak == 0)
-            _sixSnapshot = null; // streak broken: earlier moves are permanent
-
-        if (ThreeSixesLoseTurn && _sixStreak >= 3)
+        // Three Sixes mode: track the streak. Remember the board before the first six
+        // so the whole streak can be revoked if a third six follows.
+        if (ThreeSixesActive)
         {
-            _state = State.Busy;
+            _sixStreak = _diceValue == 6 ? _sixStreak + 1 : 0;
 
-            HashSet<Token> undone = RevokeSixMoves();
-            SetStatus($"{CurrentColor} rolled three 6s - this streak's moves are undone!");
-            GameSettings.Vibrate(120);
+            if (_sixStreak == 1)
+                _sixSnapshot = Board.AllTokens.ToDictionary(t => t, t => t.StepsTaken);
+            else if (_sixStreak == 0)
+                _sixSnapshot = null; // streak broken: earlier moves are permanent
 
-            Delay(1.0, () =>
+            if (_sixStreak >= 3)
             {
-                foreach (Token t in undone) t.ZIndex = 0;
-                EndTurn(false);
-            });
-            return;
+                _state = State.Busy;
+
+                HashSet<Token> undone = RevokeSixMoves();
+                _hud.Toast("Three 6s! Moves undone", CurrentColor);
+                GameSettings.Vibrate(120);
+
+                Delay(1.0, () =>
+                {
+                    foreach (Token t in undone) t.ZIndex = 0;
+                    EndTurn(false);
+                });
+                return;
+            }
         }
 
         _movable.Clear();
@@ -425,7 +466,7 @@ public partial class GameManager : Node
         if (_movable.Count == 0)
         {
             _state = State.Busy;
-            SetStatus($"{CurrentColor} rolled {_diceValue} - no moves");
+            _hud.Toast("No moves", CurrentColor);
             Delay(0.7, () => EndTurn(false));
             return;
         }
@@ -442,7 +483,6 @@ public partial class GameManager : Node
             Token pick = _movable[_rng.RandiRange(0, _movable.Count - 1)];
 
             _state = State.Busy;
-            SetStatus($"{CurrentColor} rolled {_diceValue}");
             Delay(0.25, () => MoveToken(pick));
             return;
         }
@@ -450,7 +490,6 @@ public partial class GameManager : Node
         // Bot chooses with its scoring
         if (IsBot(CurrentColor))
         {
-            SetStatus($"{CurrentColor} (bot) rolled {_diceValue}");
             BotChooseAndMove();
             return;
         }
@@ -459,7 +498,6 @@ public partial class GameManager : Node
         _state = State.WaitingForMove;
         foreach (Token t in _movable) t.Highlighted = true;
         _layout.PopOut(_movable);
-        SetStatus($"{CurrentColor} rolled {_diceValue} - pick a token");
     }
 
     private void BotChooseAndMove()
@@ -491,6 +529,7 @@ public partial class GameManager : Node
 
         _sixSnapshot = null;
         _layout.Relayout(changed); // they glide back to their old cells
+        RefreshMultipliers();
         return changed;
     }
 
@@ -511,18 +550,16 @@ public partial class GameManager : Node
         foreach (Token t in _movable) t.Highlighted = false;
         _state = State.Busy;
 
-        // Cells to hop through
+        // Cells to hop through (Supermatch moves can be long, so keep them quick)
+        int newSteps = _rules.TargetSteps(token, _diceValue);
         var path = new List<Vector2>();
-        int newSteps;
 
         if (token.IsInYard)
         {
-            newSteps = 0;
             path.Add(Board.GetTokenLocalPosition(token.PlayerColor, 0));
         }
         else
         {
-            newSteps = token.StepsTaken + _diceValue;
             for (int s = token.StepsTaken + 1; s <= newSteps; s++)
                 path.Add(Board.GetTokenLocalPosition(token.PlayerColor, s));
         }
@@ -536,7 +573,8 @@ public partial class GameManager : Node
         // Other tokens settle back into their normal layout (undoes any pop-out)
         _layout.Relayout(null, token);
 
-        Tween tween = token.MoveAlongPath(path, HopDuration, _sound.PlayStep);
+        float stepTime = Mathf.Min(HopDuration, 0.8f / Mathf.Max(1, path.Count));
+        Tween tween = token.MoveAlongPath(path, stepTime, _sound.PlayStep);
         tween.Finished += () => OnMoveFinished(token);
     }
 
@@ -550,6 +588,7 @@ public partial class GameManager : Node
             victim.StepsTaken = -1;
 
         _layout.Relayout(new HashSet<Token>(captured));
+        RefreshMultipliers();
 
         if (captured.Count > 0)
         {
@@ -557,13 +596,10 @@ public partial class GameManager : Node
             GameSettings.Vibrate(60);
         }
 
-        string victims = string.Join(", ", captured.Select(t => t.PlayerColor).Distinct());
-
         // Sparkles + sound when a token gets home; rank (and a bigger burst) when the whole house is done
         string tokenOwner = token.PlayerColor;
         bool reachedHome = token.IsFinished;
         bool houseDone = false;
-        int houseRank = 0;
 
         if (reachedHome)
         {
@@ -574,7 +610,7 @@ public partial class GameManager : Node
             if (_rules.AllFinished(tokenOwner) && !_ranks.ContainsKey(tokenOwner))
             {
                 houseDone = true;
-                houseRank = AssignRank(tokenOwner);
+                AssignRank(tokenOwner);
             }
         }
 
@@ -593,12 +629,6 @@ public partial class GameManager : Node
             // Pause briefly so the captures / sparkles can be seen
             _state = State.Busy;
 
-            var parts = new List<string>();
-            if (captured.Count > 0) parts.Add($"{CurrentColor} captured {victims}!");
-            if (houseDone) parts.Add($"{tokenOwner} finished {GameRules.Ordinal(houseRank)}!");
-            else if (reachedHome) parts.Add($"{tokenOwner} got a token home!");
-            SetStatus(string.Join("  ", parts));
-
             Delay(0.6, () =>
             {
                 foreach (Token victim in captured) victim.ZIndex = 0;
@@ -615,7 +645,7 @@ public partial class GameManager : Node
     // =====================================
 
     // Called when a player's fourth token reaches home
-    private int AssignRank(string color)
+    private void AssignRank(string color)
     {
         int rank = _ranks.Count + 1;
         _ranks[color] = rank;
@@ -632,8 +662,6 @@ public partial class GameManager : Node
         // Free-for-all: this player is out of the rotation
         if (!_config.IsTeams)
             _hud.HidePlayer(color);
-
-        return rank;
     }
 
     // Free-for-all: ends when only one player is left. Teams: ends when a team is all home.
@@ -666,7 +694,6 @@ public partial class GameManager : Node
 
         _state = State.GameOver;
         _hud.DisableAll();
-        SetStatus(title);
 
         // Short pause so the final hop and sparkles are visible before the overlay
         Delay(0.6, () => ShowWinScreen(title, colorName));

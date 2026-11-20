@@ -3,7 +3,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-// Full-screen setup menu: pick the mode, then set each seat to Human / Bot / Off.
+// Full-screen setup menu: pick the player mode, the game type, then set each seat
+// to Human / Bot / Off. Scrolls if the screen is short.
 public partial class StartScreen : CanvasLayer
 {
     public event Action<GameConfig> Started;
@@ -12,9 +13,11 @@ public partial class StartScreen : CanvasLayer
     public GameConfig Config = new GameConfig();
 
     private readonly Dictionary<GameMode, Button> _modeButtons = new();
+    private readonly Dictionary<RuleSet, Button> _ruleButtons = new();
     private readonly Dictionary<string, Button> _seatButtons = new();
     private readonly Dictionary<string, Label> _seatNames = new();
 
+    private Label _ruleDescription;
     private Label _hint;
     private Button _startButton;
 
@@ -26,26 +29,52 @@ public partial class StartScreen : CanvasLayer
         _ => "2 vs 2 Teams"
     };
 
+    private static string RuleName(RuleSet rules) => rules switch
+    {
+        RuleSet.ThreeSixes => "Three Sixes",
+        RuleSet.Deathmatch => "Deathmatch",
+        RuleSet.Supermatch => "Supermatch",
+        _ => "Classic"
+    };
+
+    private static string RuleSummary(RuleSet rules) => rules switch
+    {
+        RuleSet.ThreeSixes => "Three 6s in a row void your turn and undo those moves.",
+        RuleSet.Deathmatch => "Everyone starts with all tokens already out.",
+        RuleSet.Supermatch => "All tokens out, plus x2, x3... speed boosts.",
+        _ => "Standard Ludo rules."
+    };
+
     public override void _Ready()
     {
         Layer = 20;
-        Vector2 view = GetViewport().GetVisibleRect().Size;
 
         var bg = new ColorRect
         {
             Color = new Color(0.07f, 0.08f, 0.10f, 0.97f),
-            Size = view,
             MouseFilter = Control.MouseFilterEnum.Stop
         };
         AddChild(bg);
+        bg.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
 
-        var box = new VBoxContainer
+        // Scrolls vertically if the content is taller than the screen
+        var scroll = new ScrollContainer
         {
-            Position = new Vector2(view.X / 2f - 400f, 150f),
-            Size = new Vector2(800f, view.Y - 300f)
+            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled
         };
-        box.AddThemeConstantOverride("separation", 28);
-        AddChild(box);
+        AddChild(scroll);
+        scroll.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+
+        var center = new CenterContainer
+        {
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill
+        };
+        scroll.AddChild(center);
+
+        var box = new VBoxContainer { CustomMinimumSize = new Vector2(800, 0) };
+        box.AddThemeConstantOverride("separation", 24);
+        center.AddChild(box);
 
         // Title
         var title = MakeLabel("LUDO", 130, Colors.White);
@@ -53,30 +82,42 @@ public partial class StartScreen : CanvasLayer
         title.AddThemeConstantOverride("outline_size", 12);
         box.AddChild(title);
 
-        // Mode buttons (2x2 grid, one selected at a time)
-        box.AddChild(MakeLabel("Game mode", 38, new Color(0.8f, 0.8f, 0.8f)));
+        // Players
+        box.AddChild(MakeLabel("Players", 38, new Color(0.8f, 0.8f, 0.8f)));
 
-        var grid = new GridContainer { Columns = 2 };
-        grid.AddThemeConstantOverride("h_separation", 20);
-        grid.AddThemeConstantOverride("v_separation", 20);
-        box.AddChild(grid);
+        var modeGrid = MakeGrid();
+        box.AddChild(modeGrid);
 
-        var group = new ButtonGroup();
+        var modeGroup = new ButtonGroup();
         foreach (GameMode mode in Enum.GetValues<GameMode>())
         {
             GameMode m = mode;
-            var btn = new Button
-            {
-                Text = ModeName(m),
-                ToggleMode = true,
-                ButtonGroup = group,
-                CustomMinimumSize = new Vector2(390, 90)
-            };
-            btn.AddThemeFontSizeOverride("font_size", 34);
+            var btn = MakeToggle(ModeName(m), modeGroup);
             btn.Toggled += on => { if (on) SetMode(m); };
-            grid.AddChild(btn);
+            modeGrid.AddChild(btn);
             _modeButtons[m] = btn;
         }
+
+        // Game type
+        box.AddChild(MakeLabel("Game type", 38, new Color(0.8f, 0.8f, 0.8f)));
+
+        var ruleGrid = MakeGrid();
+        box.AddChild(ruleGrid);
+
+        var ruleGroup = new ButtonGroup();
+        foreach (RuleSet rules in Enum.GetValues<RuleSet>())
+        {
+            RuleSet r = rules;
+            var btn = MakeToggle(RuleName(r), ruleGroup);
+            btn.Toggled += on => { if (on) SetRules(r); };
+            ruleGrid.AddChild(btn);
+            _ruleButtons[r] = btn;
+        }
+
+        _ruleDescription = MakeLabel("", 30, new Color(0.9f, 0.85f, 0.5f));
+        _ruleDescription.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _ruleDescription.CustomMinimumSize = new Vector2(800, 0);
+        box.AddChild(_ruleDescription);
 
         // Seats
         box.AddChild(MakeLabel("Seats - tap to switch", 38, new Color(0.8f, 0.8f, 0.8f)));
@@ -120,10 +161,7 @@ public partial class StartScreen : CanvasLayer
             CustomMinimumSize = new Vector2(800, 110)
         };
         _startButton.AddThemeFontSizeOverride("font_size", 48);
-        _startButton.Pressed += () =>
-        {
-            Started?.Invoke(Config);
-        };
+        _startButton.Pressed += () => Started?.Invoke(Config);
         box.AddChild(_startButton);
 
         var settings = new Button
@@ -135,9 +173,31 @@ public partial class StartScreen : CanvasLayer
         settings.Pressed += () => SettingsMenu.Open(this);
         box.AddChild(settings);
 
-        // Show the remembered mode without resetting the remembered seats
+        // Show the remembered choices without resetting the remembered seats
         _modeButtons[Config.Mode].SetPressedNoSignal(true);
+        _ruleButtons[Config.Rules].SetPressedNoSignal(true);
         Refresh();
+    }
+
+    private static GridContainer MakeGrid()
+    {
+        var grid = new GridContainer { Columns = 2 };
+        grid.AddThemeConstantOverride("h_separation", 20);
+        grid.AddThemeConstantOverride("v_separation", 20);
+        return grid;
+    }
+
+    private static Button MakeToggle(string text, ButtonGroup group)
+    {
+        var btn = new Button
+        {
+            Text = text,
+            ToggleMode = true,
+            ButtonGroup = group,
+            CustomMinimumSize = new Vector2(390, 90)
+        };
+        btn.AddThemeFontSizeOverride("font_size", 34);
+        return btn;
     }
 
     private static Label MakeLabel(string text, int size, Color color)
@@ -152,7 +212,13 @@ public partial class StartScreen : CanvasLayer
         return label;
     }
 
-    // Choosing a mode sets sensible default seats
+    private void SetRules(RuleSet rules)
+    {
+        Config.Rules = rules;
+        Refresh();
+    }
+
+    // Choosing a player mode sets sensible default seats
     private void SetMode(GameMode mode)
     {
         Config.Mode = mode;
@@ -192,6 +258,8 @@ public partial class StartScreen : CanvasLayer
 
     private void Refresh()
     {
+        _ruleDescription.Text = RuleSummary(Config.Rules);
+
         foreach (string c in GameConfig.Order)
         {
             SeatType type = Config.Seats[c];
