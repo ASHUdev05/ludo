@@ -25,7 +25,7 @@ public class BotBrain
         foreach (Token t in movable)
         {
             // Small random term breaks ties so bots aren't perfectly predictable
-            float score = ScoreMove(t, dice) + _rng.Randf() * 3f;
+            float score = Score(t, dice) + _rng.Randf() * 3f;
 
             if (score > bestScore)
             {
@@ -37,7 +37,7 @@ public class BotBrain
         return best;
     }
 
-    private float ScoreMove(Token t, int dice)
+    public float Score(Token t, int dice)
     {
         string color = t.PlayerColor;
         int from = t.StepsTaken;

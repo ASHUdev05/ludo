@@ -24,9 +24,8 @@ public partial class RulesScreen : CanvasLayer
             case RuleSet.ThreeSixes:
                 return new[]
                 {
-                    "A 6 gives you another roll, as usual.",
-                    "Roll three 6s in a row and the third 6 is void.",
-                    "Your turn ends at once, and the moves you made with the first two 6s are undone.",
+                    "A 6 gives you another roll. Every roll is kept, and you spend them in any order on any of your tokens.",
+                    "Roll three 6s in a row and the whole streak is lost, together with the rest of your turn.",
                     "Two tokens of the same team on a cell form a pair. A pair moves together by half the roll (rounded up) until it reaches a star, a start square or the home lane, where it splits. Opponents cannot jump over a pair or capture it, but they may stop on its cell.",
                     "Everything else follows the classic rules."
                 };
@@ -38,7 +37,7 @@ public partial class RulesScreen : CanvasLayer
                     "No 6 is needed to begin. Roll and fight!",
                     "Landing on an opponent captures it, except on stars and start squares.",
                     "A captured token goes back to the yard and needs a 6 to come out again.",
-                    "A 6, a capture, or a token reaching home gives another turn.",
+                    "A 6 gives another roll and every roll is kept, to be spent in any order. A capture or a token reaching home also gives a roll.",
                     "Two tokens of the same team on a cell form a pair. A pair moves together by half the roll (rounded up) until it reaches a star, a start square or the home lane, where it splits. Opponents cannot jump over a pair or capture it, but they may stop on its cell.",
                     "Bring all 4 tokens home to win."
                 };
@@ -51,6 +50,7 @@ public partial class RulesScreen : CanvasLayer
                     "Your dice roll is multiplied by that token's multiplier. A badge on the token shows it.",
                     "A move that would go past home simply finishes at home.",
                     "A captured token loses its multiplier and goes back to the yard (a 6 brings it out).",
+                    "A 6 gives another roll and every roll is kept, to be spent in any order. A capture or a token reaching home also gives a roll.",
                     "Two tokens of the same team on a cell form a pair. A pair moves together by half the roll (rounded up) until it reaches a star, a start square or the home lane, where it splits. Opponents cannot jump over a pair or capture it, but they may stop on its cell.",
                     "Bring all 4 tokens home to win."
                 };

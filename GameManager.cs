@@ -3,11 +3,17 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-// Coordinates a game: setup, turn flow, dice, moves, ranks, pause and rematch.
+// Coordinates a game: setup, turn flow, saved rolls, moves, ranks, pause and rematch.
 // The details live in smaller classes:
 //   GameRules (rules), BotBrain (bot choices), TokenLayout (where tokens rest),
-//   GameHud (dice and labels), WinScreen, PauseMenu, SettingsMenu, RulesScreen,
+//   GameHud (dice, saved-roll chips), WinScreen, PauseMenu, SettingsMenu, RulesScreen,
 //   Sparkles, SoundManager.
+//
+// A TURN
+//   1. Roll phase: you roll. A 6 is saved and you roll again; the first non-6 ends the rolling.
+//      (A capture or a token reaching home earns one more roll after your saved rolls are spent.)
+//   2. Move phase: you spend the saved rolls one at a time, in any order, on any tokens.
+//      For example 6, 6 and 4 can be 16 cells on one token, or 10 on one and 6 on another.
 public partial class GameManager : Node
 {
     private enum State { Setup, WaitingForRoll, Rolling, WaitingForMove, Busy, GameOver }
@@ -18,11 +24,15 @@ public partial class GameManager : Node
     [Export] public float DiceSize = 180f;
     [Export] public float DiceGap = 28f;
 
-    // Capturing an opponent's token gives the capturer another turn
+    // Capturing an opponent's token earns another roll
     [Export] public bool ExtraTurnOnCapture = true;
 
-    // Bringing a token all the way home gives another turn
+    // Bringing a token all the way home earns another roll
     [Export] public bool ExtraTurnOnHome = true;
+
+    // On: a 6 is saved and you roll again, then spend all saved rolls in any order.
+    // Off: every roll is played right away and a 6 just earns another roll afterwards.
+    [Export] public bool CarryRolls = true;
 
     // Chance of a 6 relative to each other face (1.0 = fair die, 2.0 = about 29% sixes)
     [Export] public float SixWeight = 2.0f;
@@ -46,17 +56,21 @@ public partial class GameManager : Node
     private readonly List<string> _activeOrder = new();
     private readonly HashSet<string> _auto = new(); // human seats currently played by the bot
     private readonly RandomNumberGenerator _rng = new();
+
+    // Tokens that can move with the roll currently being played (a pair counts once)
     private readonly List<Token> _movable = new();
 
     // Players who have brought all four tokens home: color -> rank (1 = first)
     private readonly Dictionary<string, int> _ranks = new();
 
-    // Token positions before the first six of the current streak (for revoking)
-    private Dictionary<Token, (int Steps, Token Partner)> _sixSnapshot;
+    // Saved rolls waiting to be spent, which one is selected, and how many rolls are still owed
+    private readonly List<int> _pending = new();
+    private int _selected = 0;
+    private int _rollsOwed = 0;
 
     private int _currentIndex = 0;
-    private int _diceValue = 0;
-    private int _sixStreak = 0;
+    private int _diceValue = 0;   // the roll being rolled, then the roll being played
+    private int _sixStreak = 0;   // consecutive 6s in the current rolling streak
     private State _state = State.Setup;
 
     // Bumped when this node leaves the tree, so delayed callbacks from an old game do nothing
@@ -177,6 +191,7 @@ public partial class GameManager : Node
         _hud.RollFinished += OnRollFinished;
         _hud.AutoToggled += SetAutoplay;
         _hud.PausePressed += TogglePause;
+        _hud.PendingChipClicked += OnChipClicked;
 
         foreach (string color in _activeOrder)
             UpdateTag(color);
@@ -230,7 +245,7 @@ public partial class GameManager : Node
         _hud.SetTag(color, $"{color} ({who}){team}{rank}");
     }
 
-    // Updates what is drawn from token positions: Supermatch "x2 / x3 / x4" badges
+    // Updates what is drawn from token positions: pairs, Supermatch "x2 / x3 / x4" badges
     // and the frames around blockades
     private void RefreshTokenMarks()
     {
@@ -350,6 +365,7 @@ public partial class GameManager : Node
         else if (_state == State.WaitingForMove && on)
         {
             // The bot takes over a choice the human was still making
+            SetHighlights(false);
             _layout.Relayout();
             BotChooseAndMove();
         }
@@ -360,6 +376,18 @@ public partial class GameManager : Node
     // =====================================
 
     private void StartTurn()
+    {
+        _pending.Clear();
+        _hud.ClearPending();
+        _selected = 0;
+        _rollsOwed = 1;
+        _sixStreak = 0;
+
+        AwaitRoll();
+    }
+
+    // Waits for the current player to roll (humans tap their dice, bots roll by themselves)
+    private void AwaitRoll()
     {
         _state = State.WaitingForRoll;
 
@@ -392,22 +420,19 @@ public partial class GameManager : Node
         OnDiceClicked(color);
     }
 
-    private void EndTurn(bool extraTurn)
+    private void EndTurn()
     {
-        if (!extraTurn)
-        {
-            _hud.GetDice(CurrentColor).IsTurn = false;
-            _sixStreak = 0;
-            _sixSnapshot = null;
+        _hud.GetDice(CurrentColor).IsTurn = false;
+        _pending.Clear();
+        _hud.ClearPending();
 
-            // Skip players who already finished. In team games they stay in,
-            // because they move their partner's tokens.
-            do
-            {
-                _currentIndex = (_currentIndex + 1) % _activeOrder.Count;
-            }
-            while (!_config.IsTeams && _ranks.ContainsKey(CurrentColor));
+        // Skip players who already finished. In team games they stay in,
+        // because they move their partner's tokens.
+        do
+        {
+            _currentIndex = (_currentIndex + 1) % _activeOrder.Count;
         }
+        while (!_config.IsTeams && _ranks.ContainsKey(CurrentColor));
 
         StartTurn();
     }
@@ -437,61 +462,79 @@ public partial class GameManager : Node
     {
         if (_state != State.Rolling || color != CurrentColor) return;
 
-        // Three Sixes mode: track the streak. Remember the board before the first six
-        // so the whole streak can be revoked if a third six follows.
+        // Three Sixes mode: three 6s in a row lose the whole streak and the rest of the turn
         if (ThreeSixesActive)
         {
             _sixStreak = _diceValue == 6 ? _sixStreak + 1 : 0;
 
-            if (_sixStreak == 1)
-                _sixSnapshot = Board.AllTokens.ToDictionary(t => t, t => (t.StepsTaken, t.PairedWith));
-            else if (_sixStreak == 0)
-                _sixSnapshot = null; // streak broken: earlier moves are permanent
-
             if (_sixStreak >= 3)
             {
                 _state = State.Busy;
-
-                HashSet<Token> undone = RevokeSixMoves();
-                _hud.Toast("Three 6s! Moves undone", CurrentColor);
+                _pending.Clear();
+                _hud.ClearPending();
+                _hud.Toast("Three 6s! Streak lost", CurrentColor);
                 GameSettings.Vibrate(120);
 
-                Delay(1.0, () =>
-                {
-                    foreach (Token t in undone) t.ZIndex = 0;
-                    EndTurn(false);
-                });
+                Delay(1.0, EndTurn);
                 return;
             }
         }
 
-        _movable.Clear();
+        // Save the roll
+        _pending.Add(_diceValue);
 
-        foreach (Token t in _rules.ControlledTokens(CurrentColor).Where(t => _rules.CanMove(t, _diceValue)))
+        // A 6 is saved and you roll again straight away (it does not use up your roll)
+        if (CarryRolls && _diceValue == 6)
         {
-            // A pair moves as one piece, so it is a single choice: keep only one of its tokens
-            if (t.PairedWith != null && _movable.Contains(t.PairedWith)) continue;
-
-            _movable.Add(t);
-        }
-
-        // Nothing can move: pass the turn
-        if (_movable.Count == 0)
-        {
-            _state = State.Busy;
-            _hud.Toast("No moves", CurrentColor);
-            Delay(0.7, () => EndTurn(false));
+            RefreshPendingChips();
+            AwaitRoll();
             return;
         }
 
-        // Every movable token is in the same spot, so the outcome is identical:
-        // move one automatically.
+        _rollsOwed--;
+        _selected = 0;
+        ContinueMovePhase();
+    }
+
+    // =====================================
+    // MOVE PHASE: spend the saved rolls
+    // =====================================
+
+    // Picks the roll to play, then lets the player (or the bot) choose a token for it
+    private void ContinueMovePhase()
+    {
+        // Keep the chosen roll if it can still be played, otherwise take the first playable one
+        if (_selected < 0 || _selected >= _pending.Count || !HasUsableToken(_pending[_selected]))
+            _selected = FirstUsableIndex();
+
+        if (_selected < 0)
+        {
+            // Nothing that is left can be played
+            _state = State.Busy;
+
+            bool hadRolls = _pending.Count > 0;
+            _pending.Clear();
+            _hud.ClearPending();
+
+            if (hadRolls) _hud.Toast("No moves", CurrentColor);
+
+            Delay(hadRolls ? 0.7 : 0.05, FinishMovePhase);
+            return;
+        }
+
+        _diceValue = _pending[_selected];
+        _movable.Clear();
+        _movable.AddRange(BuildMovable(_diceValue));
+        RefreshPendingChips();
+
+        // Only one playable roll and every movable token is equivalent: just move one
+        bool oneRoll = _pending.Where(HasUsableToken).Distinct().Count() == 1;
         bool allEquivalent = _movable
             .Select(t => (t.PlayerColor, t.StepsTaken))
             .Distinct()
             .Count() == 1;
 
-        if (allEquivalent)
+        if (oneRoll && allEquivalent)
         {
             Token pick = _movable[_rng.RandiRange(0, _movable.Count - 1)];
 
@@ -500,7 +543,6 @@ public partial class GameManager : Node
             return;
         }
 
-        // Bot chooses with its scoring
         if (IsBot(CurrentColor))
         {
             BotChooseAndMove();
@@ -509,6 +551,91 @@ public partial class GameManager : Node
 
         // Human chooses: highlight the movable tokens and pop crowded ones out
         _state = State.WaitingForMove;
+        SetHighlights(true);
+        _layout.PopOut(WithPartners(_movable));
+    }
+
+    // After the last saved roll is spent: roll again if a roll is owed, otherwise end the turn
+    private void FinishMovePhase()
+    {
+        _hud.ClearPending();
+
+        if (_rollsOwed > 0) AwaitRoll();
+        else EndTurn();
+    }
+
+    private void AfterMove()
+    {
+        if (_pending.Count > 0)
+        {
+            _selected = 0;
+            ContinueMovePhase();
+        }
+        else
+        {
+            FinishMovePhase();
+        }
+    }
+
+    private bool HasUsableToken(int value)
+    {
+        return _rules.ControlledTokens(CurrentColor).Any(t => _rules.CanMove(t, value));
+    }
+
+    private int FirstUsableIndex()
+    {
+        for (int i = 0; i < _pending.Count; i++)
+            if (HasUsableToken(_pending[i]))
+                return i;
+
+        return -1;
+    }
+
+    // Tokens that can move by this roll. A pair moves as one piece, so it counts once.
+    private List<Token> BuildMovable(int value)
+    {
+        var list = new List<Token>();
+
+        foreach (Token t in _rules.ControlledTokens(CurrentColor).Where(t => _rules.CanMove(t, value)))
+        {
+            if (t.PairedWith != null && list.Contains(t.PairedWith)) continue;
+
+            list.Add(t);
+        }
+
+        return list;
+    }
+
+    // Shows the saved rolls in the middle of the board when there are two or more
+    private void RefreshPendingChips()
+    {
+        if (_pending.Count < 2)
+        {
+            _hud.ClearPending();
+            return;
+        }
+
+        var usable = _pending.Select(v => HasUsableToken(v)).ToList();
+        _hud.ShowPending(_pending, _selected, usable, CurrentColor);
+    }
+
+    // The player tapped one of the saved rolls: play that one next
+    private void OnChipClicked(int index)
+    {
+        if (_state != State.WaitingForMove) return;
+        if (index < 0 || index >= _pending.Count || index == _selected) return;
+        if (!HasUsableToken(_pending[index])) return;
+
+        // Undo the highlights and pop-out made for the old roll
+        SetHighlights(false);
+        _layout.Relayout();
+
+        _selected = index;
+        _diceValue = _pending[index];
+        _movable.Clear();
+        _movable.AddRange(BuildMovable(_diceValue));
+        RefreshPendingChips();
+
         SetHighlights(true);
         _layout.PopOut(WithPartners(_movable));
     }
@@ -537,51 +664,52 @@ public partial class GameManager : Node
         return all;
     }
 
+    // The bot looks at every saved roll and every token it could move, and plays the best pair
     private void BotChooseAndMove()
     {
-        Token pick = _bot.ChooseMove(_movable, _diceValue);
+        Token best = null;
+        int bestValue = _diceValue;
+        float bestScore = float.MinValue;
+
+        foreach (int value in _pending.Distinct())
+        {
+            foreach (Token t in BuildMovable(value))
+            {
+                // Small random term breaks ties so bots aren't perfectly predictable
+                float score = _bot.Score(t, value) + _rng.Randf() * 3f;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = t;
+                    bestValue = value;
+                }
+            }
+        }
+
+        if (best == null)
+        {
+            // Nothing playable (should not happen): give up the rest of the rolls
+            _pending.Clear();
+            FinishMovePhase();
+            return;
+        }
+
+        _selected = _pending.IndexOf(bestValue);
+        _diceValue = bestValue;
+        _movable.Clear();
+        _movable.AddRange(BuildMovable(bestValue));
+        RefreshPendingChips();
 
         _state = State.Busy;
         SetHighlights(false);
-        pick.Highlighted = true;
+        best.Highlighted = true;
 
-        if (pick.PairedWith != null)
-            pick.PairedWith.Highlighted = true;
+        if (best.PairedWith != null)
+            best.PairedWith.Highlighted = true;
 
+        Token pick = best;
         Delay(BotMoveDelay, () => MoveToken(pick));
-    }
-
-    // Puts every token back where it was before this streak's sixes
-    private HashSet<Token> RevokeSixMoves()
-    {
-        var changed = new HashSet<Token>();
-
-        if (_sixSnapshot == null) return changed;
-
-        foreach (var entry in _sixSnapshot)
-        {
-            if (!IsInstanceValid(entry.Key)) continue;
-
-            if (entry.Key.StepsTaken != entry.Value.Steps)
-            {
-                entry.Key.StepsTaken = entry.Value.Steps;
-                changed.Add(entry.Key);
-            }
-
-            entry.Key.PairedWith = null;
-        }
-
-        // Restore which tokens were paired
-        foreach (var entry in _sixSnapshot)
-        {
-            if (IsInstanceValid(entry.Key))
-                entry.Key.PairedWith = entry.Value.Partner;
-        }
-
-        _sixSnapshot = null;
-        _layout.Relayout(changed); // they glide back to their old cells
-        RefreshTokenMarks();
-        return changed;
     }
 
     // =====================================
@@ -606,6 +734,12 @@ public partial class GameManager : Node
     {
         SetHighlights(false);
         _state = State.Busy;
+
+        // The roll being played is spent
+        if (_selected >= 0 && _selected < _pending.Count)
+            _pending.RemoveAt(_selected);
+
+        RefreshPendingChips();
 
         // A paired token moves together with its partner
         Token partner = token.PairedWith;
@@ -715,13 +849,18 @@ public partial class GameManager : Node
 
         if (CheckGameOver()) return;
 
-        // Extra turn for a 6, a capture, or bringing a token home
-        bool extraTurn = _diceValue == 6
-            || (captured.Count > 0 && ExtraTurnOnCapture)
-            || (reachedHome && ExtraTurnOnHome);
+        // Bonus rolls, taken once the saved rolls are spent
+        if (captured.Count > 0 && ExtraTurnOnCapture) _rollsOwed++;
+        if (reachedHome && ExtraTurnOnHome) _rollsOwed++;
+        if (!CarryRolls && _diceValue == 6) _rollsOwed++;
 
         // A finished player in a free-for-all has nothing left to move
-        if (houseDone && !_config.IsTeams) extraTurn = false;
+        if (houseDone && !_config.IsTeams)
+        {
+            _pending.Clear();
+            _hud.ClearPending();
+            _rollsOwed = 0;
+        }
 
         if (captured.Count > 0 || reachedHome)
         {
@@ -731,12 +870,12 @@ public partial class GameManager : Node
             Delay(0.6, () =>
             {
                 foreach (Token victim in captured) victim.ZIndex = 0;
-                EndTurn(extraTurn);
+                AfterMove();
             });
             return;
         }
 
-        EndTurn(extraTurn);
+        AfterMove();
     }
 
     // =====================================
@@ -748,9 +887,6 @@ public partial class GameManager : Node
     {
         int rank = _ranks.Count + 1;
         _ranks[color] = rank;
-
-        // Ranks are permanent, so an unfinished six-streak can no longer be revoked
-        _sixSnapshot = null;
 
         // The house is replaced by a rank medal
         Board.SetRank(color, rank);
@@ -793,6 +929,7 @@ public partial class GameManager : Node
 
         _state = State.GameOver;
         _hud.DisableAll();
+        _hud.ClearPending();
 
         // Short pause so the final hop and sparkles are visible before the overlay
         Delay(0.6, () => ShowWinScreen(title, colorName));

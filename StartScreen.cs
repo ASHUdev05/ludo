@@ -39,7 +39,7 @@ public partial class StartScreen : CanvasLayer
 
     private static string RuleSummary(RuleSet rules) => rules switch
     {
-        RuleSet.ThreeSixes => "Three 6s in a row void your turn and undo those moves.",
+        RuleSet.ThreeSixes => "Three 6s in a row lose your whole streak and your turn.",
         RuleSet.Deathmatch => "Everyone starts with all tokens already out.",
         RuleSet.Supermatch => "All tokens out, plus x2, x3... speed boosts.",
         _ => "Standard Ludo rules."

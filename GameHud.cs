@@ -12,6 +12,9 @@ public partial class GameHud : CanvasLayer
     public event Action<string, bool> AutoToggled;
     public event Action PausePressed;
 
+    // The player tapped one of the saved rolls shown in the middle of the board
+    public event Action<int> PendingChipClicked;
+
     // Set before Build(). The small name labels next to each dice.
     public bool ShowTags = true;
 
@@ -19,8 +22,11 @@ public partial class GameHud : CanvasLayer
     private readonly Dictionary<string, Label> _tags = new();
     private readonly Dictionary<string, Button> _autoButtons = new();
 
+    private readonly List<DiceChip> _chips = new();
+
     private Vector2 _boardCenter;
     private Vector2 _boardSize;
+    private float _cell;
 
     public DiceButton GetDice(string color) => _dice[color];
     public IEnumerable<DiceButton> AllDice => _dice.Values;
@@ -37,6 +43,7 @@ public partial class GameHud : CanvasLayer
 
         _boardSize = new Vector2(board.BoardWidth, board.BoardHeight);
         _boardCenter = new Vector2(midX, midY);
+        _cell = board.BoardWidth / 15f;
 
         foreach (string color in activeColors)
         {
@@ -117,6 +124,53 @@ public partial class GameHud : CanvasLayer
         pause.OffsetRight = -24f;
         pause.OffsetTop = 24f;
         pause.OffsetBottom = 100f;
+    }
+
+    // Shows the saved rolls as small dice in the middle of the board (the center is never
+    // used by tokens). The selected roll glows; rolls that can't be played are dimmed.
+    public void ShowPending(IReadOnlyList<int> values, int selected, IReadOnlyList<bool> usable, string colorName)
+    {
+        ClearPending();
+
+        int count = Math.Min(values.Count, 9);
+        float size = _cell * 0.9f;
+        float gap = _cell * 0.12f;
+        int cols = Math.Min(3, count);
+        int rows = (count + 2) / 3;
+
+        float totalWidth = cols * size + (cols - 1) * gap;
+        float totalHeight = rows * size + (rows - 1) * gap;
+        Vector2 origin = _boardCenter - new Vector2(totalWidth, totalHeight) / 2f;
+
+        for (int i = 0; i < count; i++)
+        {
+            int index = i;
+
+            var chip = new DiceChip
+            {
+                Value = values[i],
+                PlayerColor = colorName,
+                Selected = i == selected,
+                Usable = usable[i],
+                Size = new Vector2(size, size),
+                Position = origin + new Vector2((i % 3) * (size + gap), (i / 3) * (size + gap))
+            };
+
+            chip.Clicked += () => PendingChipClicked?.Invoke(index);
+            AddChild(chip);
+            _chips.Add(chip);
+        }
+    }
+
+    public void ClearPending()
+    {
+        foreach (DiceChip chip in _chips)
+        {
+            if (IsInstanceValid(chip))
+                chip.QueueFree();
+        }
+
+        _chips.Clear();
     }
 
     // Short message over the middle of the board that fades out by itself
