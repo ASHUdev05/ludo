@@ -15,15 +15,15 @@ public class TokenLayout
 
     // Glides every token to its resting place. Tokens in "flying" move slower and draw on top
     // (used for captured tokens going home and for revoked moves). "skip" is left alone.
-    public void Relayout(HashSet<Token> flying = null, Token skip = null)
+    public void Relayout(HashSet<Token> flying = null, Token skip = null, Token skip2 = null)
     {
         foreach (Token t in _board.AllTokens)
         {
-            if (t == skip || !t.IsInYard) continue;
+            if (t == skip || t == skip2 || !t.IsInYard) continue;
             Place(t, t.YardPosition, 1f, flying);
         }
 
-        foreach (var group in GroupByCell(skip).Values)
+        foreach (var group in GroupByCell(skip, skip2).Values)
         {
             int n = group.Tokens.Count;
 
@@ -65,13 +65,13 @@ public class TokenLayout
     }
 
     // Groups tokens that stand on the same board cell (yard tokens are ignored)
-    private Dictionary<Vector2I, (Vector2 Pos, Vector2 Cell, List<Token> Tokens)> GroupByCell(Token skip)
+    private Dictionary<Vector2I, (Vector2 Pos, Vector2 Cell, List<Token> Tokens)> GroupByCell(Token skip, Token skip2 = null)
     {
         var groups = new Dictionary<Vector2I, (Vector2 Pos, Vector2 Cell, List<Token> Tokens)>();
 
         foreach (Token t in _board.AllTokens)
         {
-            if (t == skip || t.IsInYard) continue;
+            if (t == skip || t == skip2 || t.IsInYard) continue;
 
             Vector2 basePos = _board.GetTokenLocalPosition(t.PlayerColor, t.StepsTaken);
             var key = new Vector2I(Mathf.RoundToInt(basePos.X), Mathf.RoundToInt(basePos.Y));

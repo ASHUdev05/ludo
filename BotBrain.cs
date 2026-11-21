@@ -45,6 +45,9 @@ public class BotBrain
 
         float score = 0f;
 
+        // A pair that is not split by this move stays protected while it moves
+        bool staysPair = t.PairedWith != null && !_rules.PairBreaks(t, dice);
+
         // Getting a token out of the yard is valuable; otherwise prefer progress
         if (t.IsInYard) score += 40f;
         else score += to * 0.5f;
@@ -70,13 +73,13 @@ public class BotBrain
         // Reaching a safe square
         if (to <= 50 && _board.IsSafe(color, to)) score += 25f;
 
-        // Blockades: forming one is good, breaking one is slightly bad
+        // Pairs: forming one is good, leaving one behind is slightly bad
         if (to <= 50 && !_board.IsSafe(color, to) && TeammatesAt(t, to) > 0) score += 20f;
-        if (from >= 0 && from <= 50 && !_board.IsSafe(color, from) && TeammatesAt(t, from) > 0) score -= 10f;
+        if (!staysPair && from >= 0 && from <= 50 && !_board.IsSafe(color, from) && TeammatesAt(t, from) > 0) score -= 10f;
 
         // Danger: run away from threats, avoid walking into them
         if (from >= 0 && IsThreatened(t, from)) score += 30f + from * 0.2f;
-        if (IsThreatened(t, to)) score -= 35f;
+        if (!staysPair && IsThreatened(t, to)) score -= 35f;
 
         return score;
     }

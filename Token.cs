@@ -15,6 +15,9 @@ public partial class Token : Area2D
     // Where this token sits in its yard (local to the Tokens node)
     public Vector2 YardPosition;
 
+    // The teammate this token is paired with (two tokens standing together move as one)
+    public Token PairedWith;
+
     public bool IsInYard => StepsTaken < 0;
     public bool IsFinished => StepsTaken >= 56;
 

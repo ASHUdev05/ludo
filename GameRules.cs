@@ -3,6 +3,16 @@ using System.Collections.Generic;
 using System.Linq;
 
 // The rules of Ludo, kept separate from UI and flow so they are easy to read and test.
+//
+// PAIRS (blockades)
+//  - Two tokens of the same team landing on one shared-track cell form a pair. In team games
+//    the two partners' tokens can pair with each other.
+//  - A pair moves as one piece: both tokens move together by half the roll (rounded up).
+//  - A pair stays a pair until it reaches a star, a start square or the home lane, where it
+//    splits back into two free tokens. A pair never moves past such a cell.
+//  - A pair, and any token standing with a teammate, cannot be captured.
+//  - Opponents cannot jump over a pair. They may stop on its cell (and move on from there).
+//  - Stars and start squares are shared safe cells and never hold pairs.
 public class GameRules
 {
     // 0..50 track, 51..55 home lane, 56 = finished
@@ -21,8 +31,12 @@ public class GameRules
 
     private bool IsSupermatch => _config.Rules == RuleSet.Supermatch;
 
-    // Supermatch: a token's speed multiplier. It starts at x1 and goes up by one each time
-    // the token reaches another player's start square (x2, x3, x4...). Always x1 otherwise.
+    // =====================================
+    // MULTIPLIERS (Supermatch)
+    // =====================================
+
+    // A token's speed multiplier. It starts at x1 and goes up by one each time the token reaches
+    // another player's start square (x2, x3, x4...). Always x1 in other game types.
     public int Multiplier(Token t)
     {
         if (!IsSupermatch || t.IsInYard) return 1;
@@ -45,24 +59,142 @@ public class GameRules
         return multiplier;
     }
 
+    // =====================================
+    // MOVING
+    // =====================================
+
     public bool CanMove(Token t, int dice)
     {
         if (t.IsInYard) return dice == 6;               // need a 6 to leave the yard
         if (t.IsFinished) return false;
 
+        if (t.PairedWith != null)
+        {
+            // The pair moves together, so neither token may be blocked
+            int distance = PairDistance(t, dice);
+
+            return !PathBlocked(t, t.StepsTaken + distance)
+                && !PathBlocked(t.PairedWith, t.PairedWith.StepsTaken + distance);
+        }
+
         // Can't overshoot home (Supermatch just finishes at home instead)
         if (!IsSupermatch && t.StepsTaken + dice > HomeSteps) return false;
 
-        // Can't land on or pass through an opposing blockade
         return !PathBlocked(t, TargetSteps(t, dice));
     }
 
+    // Step count the token ends on after this roll (a paired token moves with its partner)
+    public int TargetSteps(Token t, int dice)
+    {
+        if (t.IsInYard) return 0;
+
+        if (t.PairedWith != null)
+            return t.StepsTaken + PairDistance(t, dice);
+
+        return Math.Min(HomeSteps, t.StepsTaken + dice * Multiplier(t));
+    }
+
     // =====================================
-    // BLOCKADES
+    // PAIRS
     // =====================================
-    // Two or more tokens of the same team on one cell form a blockade: opponents can't land on
-    // it or pass through it, and its tokens can't be captured. Stars and start squares are
-    // shared safe cells, so they never hold blockades.
+
+    // Cells until this token reaches the next star, start square or the home lane
+    private int StopDistance(Token t)
+    {
+        for (int k = 1; k <= 56; k++)
+        {
+            // IsSafe is also true once the token is in its home lane
+            if (_board.IsSafe(t.PlayerColor, t.StepsTaken + k))
+                return k;
+        }
+
+        return 1;
+    }
+
+    // Half of the roll, rounded up. A pair moves at the pace of its slower token.
+    private int PairHalf(Token a, int dice)
+    {
+        int multiplier = Math.Min(Multiplier(a), Multiplier(a.PairedWith));
+        return Math.Max(1, (dice * multiplier + 1) / 2);
+    }
+
+    private int PairStop(Token a)
+    {
+        return Math.Min(StopDistance(a), StopDistance(a.PairedWith));
+    }
+
+    // How many cells both tokens of a pair move for this roll (never past the next stop)
+    public int PairDistance(Token a, int dice)
+    {
+        return Math.Min(PairHalf(a, dice), PairStop(a));
+    }
+
+    // True if this roll takes the pair to a star, a start square or the home lane,
+    // where it splits
+    public bool PairBreaks(Token a, int dice)
+    {
+        return PairHalf(a, dice) >= PairStop(a);
+    }
+
+    public void Unpair(Token t)
+    {
+        if (t.PairedWith != null)
+        {
+            t.PairedWith.PairedWith = null;
+            t.PairedWith = null;
+        }
+    }
+
+    // Call after a single token has landed: if a free teammate shares its (non-safe) cell,
+    // the two form a pair.
+    public bool TryFormPair(Token mover)
+    {
+        int cell = _board.GetPathIndex(mover.PlayerColor, mover.StepsTaken);
+
+        if (cell < 0 || _board.IsSafeIndex(cell) || mover.PairedWith != null)
+            return false;
+
+        foreach (Token other in _board.AllTokens)
+        {
+            if (other == mover || other.PairedWith != null) continue;
+            if (!_config.SameTeam(mover.PlayerColor, other.PlayerColor)) continue;
+            if (_board.GetPathIndex(other.PlayerColor, other.StepsTaken) != cell) continue;
+
+            mover.PairedWith = other;
+            other.PairedWith = mover;
+            return true;
+        }
+
+        return false;
+    }
+
+    // Drops pairs that no longer make sense (tokens not on the same non-safe track cell)
+    public void NormalizePairs()
+    {
+        foreach (Token t in _board.AllTokens)
+        {
+            Token partner = t.PairedWith;
+            if (partner == null) continue;
+
+            int cell = _board.GetPathIndex(t.PlayerColor, t.StepsTaken);
+            int partnerCell = _board.GetPathIndex(partner.PlayerColor, partner.StepsTaken);
+
+            bool valid = partner.PairedWith == t
+                && cell >= 0
+                && cell == partnerCell
+                && !_board.IsSafeIndex(cell);
+
+            if (!valid)
+            {
+                t.PairedWith = null;
+                if (partner.PairedWith == t) partner.PairedWith = null;
+            }
+        }
+    }
+
+    // =====================================
+    // BLOCKADES AND CAPTURES
+    // =====================================
 
     private string TeamKey(string color)
     {
@@ -70,7 +202,7 @@ public class GameRules
         return color == "Red" || color == "Yellow" ? "Team1" : "Team2";
     }
 
-    // Does the shared-track cell hold a blockade that stops a token of "moverColor"?
+    // Does the shared-track cell hold a pair (or more) that stops a token of "moverColor"?
     public bool IsBlockedCell(string moverColor, int pathIndex)
     {
         if (pathIndex < 0 || _board.IsSafeIndex(pathIndex)) return false;
@@ -89,10 +221,11 @@ public class GameRules
         return counts.Values.Any(count => count >= 2);
     }
 
-    // True if any cell the token would enter on its way to targetSteps holds an opposing blockade
+    // True if the token would have to jump over an opposing pair on its way to targetSteps.
+    // Landing exactly on the pair's cell is allowed, so the final cell is not checked.
     public bool PathBlocked(Token t, int targetSteps)
     {
-        for (int s = t.StepsTaken + 1; s <= targetSteps; s++)
+        for (int s = t.StepsTaken + 1; s < targetSteps; s++)
         {
             int cell = _board.GetPathIndex(t.PlayerColor, s);
 
@@ -103,7 +236,7 @@ public class GameRules
         return false;
     }
 
-    // Every blockade on the board: shared-track cell index and the color holding it
+    // Every cell holding a pair, for drawing: shared-track cell index and the color holding it
     public List<(int Index, string Color)> GetBlockades()
     {
         var result = new List<(int Index, string Color)>();
@@ -122,32 +255,27 @@ public class GameRules
         return result;
     }
 
-    // Step count the token ends on after this roll
-    public int TargetSteps(Token t, int dice)
+    // A token standing with at least one teammate on a shared-track cell can't be captured
+    private bool IsProtected(Token t)
     {
-        if (t.IsInYard) return 0;
+        int cell = _board.GetPathIndex(t.PlayerColor, t.StepsTaken);
+        if (cell < 0) return false;
 
-        return Math.Min(HomeSteps, t.StepsTaken + dice * Multiplier(t));
+        int count = 0;
+
+        foreach (Token other in _board.AllTokens)
+        {
+            if (!_config.SameTeam(t.PlayerColor, other.PlayerColor)) continue;
+
+            if (_board.GetPathIndex(other.PlayerColor, other.StepsTaken) == cell)
+                count++;
+        }
+
+        return count >= 2;
     }
 
-    // The tokens a player may move. In team games, a player who has brought all
-    // their own tokens home moves their partner's tokens instead.
-    public IEnumerable<Token> ControlledTokens(string color)
-    {
-        string partner = GameConfig.PartnerOf(color);
-        bool controlsPartner = _config.IsTeams && AllFinished(color);
-
-        return _board.AllTokens.Where(t =>
-            t.PlayerColor == color || (controlsPartner && t.PlayerColor == partner));
-    }
-
-    public bool AllFinished(string color)
-    {
-        return _board.AllTokens.Where(t => t.PlayerColor == color).All(t => t.IsFinished);
-    }
-
-    // Opposing tokens sent home by this token's landing. Stars, start cells and
-    // home lanes are safe; teammates and yourself are never captured.
+    // Opposing tokens sent home by this token's landing. Stars, start cells and home lanes are
+    // safe; teammates, yourself and anything standing in a pair are never captured.
     public List<Token> FindCaptures(Token mover)
     {
         var result = new List<Token>();
@@ -160,12 +288,42 @@ public class GameRules
         foreach (Token other in _board.AllTokens)
         {
             if (_config.SameTeam(mover.PlayerColor, other.PlayerColor)) continue;
+            if (_board.GetPathIndex(other.PlayerColor, other.StepsTaken) != cell) continue;
+            if (IsProtected(other)) continue;
 
-            if (_board.GetPathIndex(other.PlayerColor, other.StepsTaken) == cell)
-                result.Add(other);
+            result.Add(other);
         }
 
         return result;
+    }
+
+    // =====================================
+    // WHO MOVES WHAT, WINNING
+    // =====================================
+
+    // The tokens a player may move. In team games, a player who has brought all their own tokens
+    // home moves their partner's tokens instead, and either partner may move a pair that
+    // contains both players' tokens.
+    public IEnumerable<Token> ControlledTokens(string color)
+    {
+        string partner = GameConfig.PartnerOf(color);
+        bool controlsPartner = _config.IsTeams && AllFinished(color);
+
+        var own = _board.AllTokens
+            .Where(t => t.PlayerColor == color || (controlsPartner && t.PlayerColor == partner))
+            .ToList();
+
+        var pairedPartners = own
+            .Where(t => t.PairedWith != null && !own.Contains(t.PairedWith))
+            .Select(t => t.PairedWith)
+            .ToList();
+
+        return own.Concat(pairedPartners).Distinct();
+    }
+
+    public bool AllFinished(string color)
+    {
+        return _board.AllTokens.Where(t => t.PlayerColor == color).All(t => t.IsFinished);
     }
 
     // A player wins when all their tokens are home; a team wins when both partners' are.

@@ -52,7 +52,7 @@ public partial class GameManager : Node
     private readonly Dictionary<string, int> _ranks = new();
 
     // Token positions before the first six of the current streak (for revoking)
-    private Dictionary<Token, int> _sixSnapshot;
+    private Dictionary<Token, (int Steps, Token Partner)> _sixSnapshot;
 
     private int _currentIndex = 0;
     private int _diceValue = 0;
@@ -234,6 +234,8 @@ public partial class GameManager : Node
     // and the frames around blockades
     private void RefreshTokenMarks()
     {
+        _rules.NormalizePairs();
+
         foreach (Token t in Board.AllTokens)
             t.Multiplier = _rules.Multiplier(t);
 
@@ -442,7 +444,7 @@ public partial class GameManager : Node
             _sixStreak = _diceValue == 6 ? _sixStreak + 1 : 0;
 
             if (_sixStreak == 1)
-                _sixSnapshot = Board.AllTokens.ToDictionary(t => t, t => t.StepsTaken);
+                _sixSnapshot = Board.AllTokens.ToDictionary(t => t, t => (t.StepsTaken, t.PairedWith));
             else if (_sixStreak == 0)
                 _sixSnapshot = null; // streak broken: earlier moves are permanent
 
@@ -464,7 +466,14 @@ public partial class GameManager : Node
         }
 
         _movable.Clear();
-        _movable.AddRange(_rules.ControlledTokens(CurrentColor).Where(t => _rules.CanMove(t, _diceValue)));
+
+        foreach (Token t in _rules.ControlledTokens(CurrentColor).Where(t => _rules.CanMove(t, _diceValue)))
+        {
+            // A pair moves as one piece, so it is a single choice: keep only one of its tokens
+            if (t.PairedWith != null && _movable.Contains(t.PairedWith)) continue;
+
+            _movable.Add(t);
+        }
 
         // Nothing can move: pass the turn
         if (_movable.Count == 0)
@@ -500,8 +509,32 @@ public partial class GameManager : Node
 
         // Human chooses: highlight the movable tokens and pop crowded ones out
         _state = State.WaitingForMove;
-        foreach (Token t in _movable) t.Highlighted = true;
-        _layout.PopOut(_movable);
+        SetHighlights(true);
+        _layout.PopOut(WithPartners(_movable));
+    }
+
+    // Highlights (or clears) every movable token, including the partner of a pair
+    private void SetHighlights(bool on)
+    {
+        foreach (Token t in _movable)
+        {
+            t.Highlighted = on;
+
+            if (t.PairedWith != null)
+                t.PairedWith.Highlighted = on;
+        }
+    }
+
+    // The movable tokens plus the partners they would take along
+    private List<Token> WithPartners(List<Token> tokens)
+    {
+        var all = new List<Token>(tokens);
+
+        foreach (Token t in tokens)
+            if (t.PairedWith != null && !all.Contains(t.PairedWith))
+                all.Add(t.PairedWith);
+
+        return all;
     }
 
     private void BotChooseAndMove()
@@ -509,8 +542,11 @@ public partial class GameManager : Node
         Token pick = _bot.ChooseMove(_movable, _diceValue);
 
         _state = State.Busy;
-        foreach (Token t in _movable) t.Highlighted = false;
+        SetHighlights(false);
         pick.Highlighted = true;
+
+        if (pick.PairedWith != null)
+            pick.PairedWith.Highlighted = true;
 
         Delay(BotMoveDelay, () => MoveToken(pick));
     }
@@ -522,13 +558,24 @@ public partial class GameManager : Node
 
         if (_sixSnapshot == null) return changed;
 
-        foreach (var pair in _sixSnapshot)
+        foreach (var entry in _sixSnapshot)
         {
-            if (!IsInstanceValid(pair.Key)) continue;
-            if (pair.Key.StepsTaken == pair.Value) continue;
+            if (!IsInstanceValid(entry.Key)) continue;
 
-            pair.Key.StepsTaken = pair.Value;
-            changed.Add(pair.Key);
+            if (entry.Key.StepsTaken != entry.Value.Steps)
+            {
+                entry.Key.StepsTaken = entry.Value.Steps;
+                changed.Add(entry.Key);
+            }
+
+            entry.Key.PairedWith = null;
+        }
+
+        // Restore which tokens were paired
+        foreach (var entry in _sixSnapshot)
+        {
+            if (IsInstanceValid(entry.Key))
+                entry.Key.PairedWith = entry.Value.Partner;
         }
 
         _sixSnapshot = null;
@@ -544,50 +591,98 @@ public partial class GameManager : Node
     private void OnTokenClicked(Token token)
     {
         if (_state != State.WaitingForMove) return;
-        if (!_movable.Contains(token)) return;
 
-        MoveToken(token);
+        // Tapping either token of a pair chooses the pair
+        Token chosen = _movable.Contains(token) ? token
+            : (token.PairedWith != null && _movable.Contains(token.PairedWith)) ? token.PairedWith
+            : null;
+
+        if (chosen == null) return;
+
+        MoveToken(chosen);
     }
 
     private void MoveToken(Token token)
     {
-        foreach (Token t in _movable) t.Highlighted = false;
+        SetHighlights(false);
         _state = State.Busy;
 
-        // Cells to hop through (Supermatch moves can be long, so keep them quick)
-        int newSteps = _rules.TargetSteps(token, _diceValue);
-        var path = new List<Vector2>();
+        // A paired token moves together with its partner
+        Token partner = token.PairedWith;
 
-        if (token.IsInYard)
-        {
-            path.Add(Board.GetTokenLocalPosition(token.PlayerColor, 0));
-        }
-        else
-        {
-            for (int s = token.StepsTaken + 1; s <= newSteps; s++)
-                path.Add(Board.GetTokenLocalPosition(token.PlayerColor, s));
-        }
+        // Work everything out before any token is changed
+        int newSteps = _rules.TargetSteps(token, _diceValue);
+        int partnerSteps = partner != null ? _rules.TargetSteps(partner, _diceValue) : 0;
+        bool pairBreaks = partner != null && _rules.PairBreaks(token, _diceValue);
+
+        List<Vector2> path = BuildPath(token, newSteps);
+        List<Vector2> partnerPath = partner != null ? BuildPath(partner, partnerSteps) : null;
 
         token.StepsTaken = newSteps;
+        if (partner != null) partner.StepsTaken = partnerSteps;
 
-        // Moving token returns to full size and draws above the others
+        // Moving tokens return to full size and draw above the others
         token.ZIndex = 10;
         token.ScaleTo(1f, 0.15f);
 
+        if (partner != null)
+        {
+            partner.ZIndex = 10;
+            partner.ScaleTo(1f, 0.15f);
+        }
+
         // Other tokens settle back into their normal layout (undoes any pop-out)
-        _layout.Relayout(null, token);
+        _layout.Relayout(null, token, partner);
 
         float stepTime = Mathf.Min(HopDuration, 0.8f / Mathf.Max(1, path.Count));
         Tween tween = token.MoveAlongPath(path, stepTime, _sound.PlayStep);
-        tween.Finished += () => OnMoveFinished(token);
+        partner?.MoveAlongPath(partnerPath, stepTime);
+
+        tween.Finished += () => OnMoveFinished(token, partner, pairBreaks);
     }
 
-    private void OnMoveFinished(Token token)
+    // Cells a token hops through to reach targetSteps (Supermatch moves can be long)
+    private List<Vector2> BuildPath(Token t, int targetSteps)
+    {
+        var path = new List<Vector2>();
+
+        if (t.IsInYard)
+        {
+            path.Add(Board.GetTokenLocalPosition(t.PlayerColor, 0));
+            return path;
+        }
+
+        for (int s = t.StepsTaken + 1; s <= targetSteps; s++)
+            path.Add(Board.GetTokenLocalPosition(t.PlayerColor, s));
+
+        return path;
+    }
+
+    private void OnMoveFinished(Token token, Token partner, bool pairBreaks)
     {
         token.ZIndex = 0;
+        if (partner != null) partner.ZIndex = 0;
 
-        // Landing on an unsafe cell sends every opposing token there back to its yard
+        if (partner != null)
+        {
+            // A pair splits when it reaches a star, a start square or the home lane
+            if (pairBreaks) _rules.Unpair(token);
+        }
+        else
+        {
+            // A single token that lands on a teammate's cell forms a pair with it
+            _rules.TryFormPair(token);
+        }
+
+        // Landing on an unsafe cell sends every unprotected opposing token there back to its yard
         List<Token> captured = _rules.FindCaptures(token);
+
+        if (partner != null)
+        {
+            foreach (Token extra in _rules.FindCaptures(partner))
+                if (!captured.Contains(extra)) captured.Add(extra);
+        }
+
         foreach (Token victim in captured)
             victim.StepsTaken = -1;
 
