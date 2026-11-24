@@ -43,27 +43,26 @@ public class BotBrain
         int from = t.StepsTaken;
         int to = _rules.TargetSteps(t, dice);
 
-        float score = 0f;
+        // Is this token moving as part of a pair, and does it stay one?
+        bool movesAsPair = t.PairedWith != null;
+        bool staysPair = movesAsPair && !_rules.PairBreaks(t, dice);
 
-        // A pair that is not split by this move stays protected while it moves
-        bool staysPair = t.PairedWith != null && !_rules.PairBreaks(t, dice);
+        // A single token that lands on a free teammate forms a pair (and captures nothing)
+        bool joinsTeammate = !movesAsPair && FreeTeammateAt(t, to);
+        bool pairAtTarget = staysPair || joinsTeammate;
+
+        float score = 0f;
 
         // Getting a token out of the yard is valuable; otherwise prefer progress
         if (t.IsInYard) score += 40f;
         else score += to * 0.5f;
 
-        // Capturing: more valuable the further the victim had travelled
-        if (!_board.IsSafe(color, to))
+        // Capturing: more valuable the further the victim had travelled.
+        // A pair captures pairs only; a single token captures unprotected single tokens.
+        if (!joinsTeammate)
         {
-            int cell = _board.GetPathIndex(color, to);
-
-            foreach (Token other in _board.AllTokens)
-            {
-                if (_config.SameTeam(color, other.PlayerColor)) continue;
-
-                if (_board.GetPathIndex(other.PlayerColor, other.StepsTaken) == cell)
-                    score += 100f + other.StepsTaken * 2f;
-            }
+            foreach (Token victim in _rules.PredictCaptures(t, to, movesAsPair))
+                score += 100f + victim.StepsTaken * 2f;
         }
 
         // Getting home / into the home lane
@@ -73,15 +72,32 @@ public class BotBrain
         // Reaching a safe square
         if (to <= 50 && _board.IsSafe(color, to)) score += 25f;
 
-        // Pairs: forming one is good, leaving one behind is slightly bad
-        if (to <= 50 && !_board.IsSafe(color, to) && TeammatesAt(t, to) > 0) score += 20f;
-        if (!staysPair && from >= 0 && from <= 50 && !_board.IsSafe(color, from) && TeammatesAt(t, from) > 0) score -= 10f;
+        // Forming a pair on an ordinary cell is good
+        if (joinsTeammate && to <= 50 && !_board.IsSafe(color, to)) score += 20f;
 
         // Danger: run away from threats, avoid walking into them
-        if (from >= 0 && IsThreatened(t, from)) score += 30f + from * 0.2f;
-        if (!staysPair && IsThreatened(t, to)) score -= 35f;
+        if (from >= 0 && IsThreatened(t, from, movesAsPair)) score += 30f + from * 0.2f;
+        if (IsThreatened(t, to, pairAtTarget)) score -= 35f;
 
         return score;
+    }
+
+    // True if another free token of this token's team stands on the cell for the given step count
+    private bool FreeTeammateAt(Token self, int steps)
+    {
+        int cell = _board.GetPathIndex(self.PlayerColor, steps);
+        if (cell < 0) return false;
+
+        foreach (Token other in _board.AllTokens)
+        {
+            if (other == self || other.PairedWith != null) continue;
+            if (!_config.SameTeam(self.PlayerColor, other.PlayerColor)) continue;
+
+            if (_board.GetPathIndex(other.PlayerColor, other.StepsTaken) == cell)
+                return true;
+        }
+
+        return false;
     }
 
     // How many other tokens of this token's team stand on the cell for the given step count
@@ -104,16 +120,17 @@ public class BotBrain
         return count;
     }
 
-    // True if an opposing token could land on this token's cell with a single roll (1-6),
-    // taking multipliers and blockades into account
-    private bool IsThreatened(Token self, int steps)
+    // Could an opposing token capture this one next turn?
+    //  - asPair: the token is part of a pair, so only an opposing pair can capture it.
+    //  - otherwise only opposing single tokens can, and not if it stands with a teammate.
+    private bool IsThreatened(Token self, int steps, bool asPair)
     {
         string color = self.PlayerColor;
 
         if (_board.IsSafe(color, steps)) return false;
 
-        // Standing with a teammate forms a blockade, which can't be captured
-        if (TeammatesAt(self, steps) > 0) return false;
+        // Standing with a teammate (without being a pair) can't be captured by single tokens
+        if (!asPair && TeammatesAt(self, steps) > 0) return false;
 
         int loop = _board.MainPathPositions.Count;
         int cell = _board.GetPathIndex(color, steps);
@@ -126,17 +143,43 @@ public class BotBrain
             if (otherCell < 0) continue;
 
             int distance = (cell - otherCell + loop) % loop;
-            int multiplier = _rules.Multiplier(other);
+            if (distance == 0) continue;
 
-            bool reachable = distance >= multiplier
-                && distance % multiplier == 0
-                && distance / multiplier <= 6;
+            if (asPair)
+            {
+                // Only an opposing pair can capture a pair
+                if (other.PairedWith == null) continue;
 
-            // It must still be on the shared track when it gets there, and nothing may block its way
-            if (reachable
-                && other.StepsTaken + distance <= 50
-                && !_rules.PathBlocked(other, other.StepsTaken + distance))
-                return true;
+                bool reachable = false;
+                for (int roll = 1; roll <= 6; roll++)
+                {
+                    if (_rules.PairDistance(other, roll) == distance)
+                    {
+                        reachable = true;
+                        break;
+                    }
+                }
+
+                if (reachable && !_rules.PathBlocked(other, other.StepsTaken + distance))
+                    return true;
+            }
+            else
+            {
+                // Pairs never capture single tokens
+                if (other.PairedWith != null) continue;
+
+                int multiplier = _rules.Multiplier(other);
+
+                bool reachable = distance >= multiplier
+                    && distance % multiplier == 0
+                    && distance / multiplier <= 6;
+
+                // It must still be on the shared track when it gets there, and nothing may block its way
+                if (reachable
+                    && other.StepsTaken + distance <= 50
+                    && !_rules.PathBlocked(other, other.StepsTaken + distance))
+                    return true;
+            }
         }
 
         return false;

@@ -26,7 +26,7 @@ public partial class RulesScreen : CanvasLayer
                 {
                     "A 6 gives you another roll. Every roll is kept, and you spend them in any order on any of your tokens.",
                     "Roll three 6s in a row and the whole streak is lost, together with the rest of your turn.",
-                    "Two tokens of the same team on a cell form a pair. A pair moves together by half the roll (rounded up) until it reaches a star, a start square or the home lane, where it splits. Opponents cannot jump over a pair or capture it, but they may stop on its cell.",
+                    "Two tokens of the same team on a cell form a pair. A pair moves together by half the roll (rounded up) until it reaches a star, a start square or the home lane, where it splits. Nobody can jump over a pair, but they may stop on its cell. Single tokens cannot capture a pair; only another pair can, by landing on it. A pair cannot capture single tokens. Stars and start squares are always safe.",
                     "Everything else follows the classic rules."
                 };
 
@@ -38,7 +38,7 @@ public partial class RulesScreen : CanvasLayer
                     "Landing on an opponent captures it, except on stars and start squares.",
                     "A captured token goes back to the yard and needs a 6 to come out again.",
                     "A 6 gives another roll and every roll is kept, to be spent in any order. A capture or a token reaching home also gives a roll.",
-                    "Two tokens of the same team on a cell form a pair. A pair moves together by half the roll (rounded up) until it reaches a star, a start square or the home lane, where it splits. Opponents cannot jump over a pair or capture it, but they may stop on its cell.",
+                    "Two tokens of the same team on a cell form a pair. A pair moves together by half the roll (rounded up) until it reaches a star, a start square or the home lane, where it splits. Nobody can jump over a pair, but they may stop on its cell. Single tokens cannot capture a pair; only another pair can, by landing on it. A pair cannot capture single tokens. Stars and start squares are always safe.",
                     "Bring all 4 tokens home to win."
                 };
 
@@ -51,7 +51,7 @@ public partial class RulesScreen : CanvasLayer
                     "A move that would go past home simply finishes at home.",
                     "A captured token loses its multiplier and goes back to the yard (a 6 brings it out).",
                     "A 6 gives another roll and every roll is kept, to be spent in any order. A capture or a token reaching home also gives a roll.",
-                    "Two tokens of the same team on a cell form a pair. A pair moves together by half the roll (rounded up) until it reaches a star, a start square or the home lane, where it splits. Opponents cannot jump over a pair or capture it, but they may stop on its cell.",
+                    "Two tokens of the same team on a cell form a pair. A pair moves together by half the roll (rounded up) until it reaches a star, a start square or the home lane, where it splits. Nobody can jump over a pair, but they may stop on its cell. Single tokens cannot capture a pair; only another pair can, by landing on it. A pair cannot capture single tokens. Stars and start squares are always safe.",
                     "Bring all 4 tokens home to win."
                 };
 

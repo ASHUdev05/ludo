@@ -480,6 +480,28 @@ public partial class GameManager : Node
             }
         }
 
+        // A 6 that no token can play (for example everything left is in the home lane) is void:
+        // it is not saved and it does not earn another roll
+        if (CarryRolls && _diceValue == 6 && !HasUsableToken(6))
+        {
+            _state = State.Busy;
+            _rollsOwed--;
+            _selected = 0;
+
+            if (_pending.Count == 0)
+            {
+                _hud.Toast("No moves", CurrentColor);
+                Delay(0.7, FinishMovePhase);
+            }
+            else
+            {
+                // Rolls saved earlier can still be played
+                ContinueMovePhase();
+            }
+
+            return;
+        }
+
         // Save the roll
         _pending.Add(_diceValue);
 
@@ -527,14 +549,15 @@ public partial class GameManager : Node
         _movable.AddRange(BuildMovable(_diceValue));
         RefreshPendingChips();
 
-        // Only one playable roll and every movable token is equivalent: just move one
-        bool oneRoll = _pending.Where(HasUsableToken).Distinct().Count() == 1;
-        bool allEquivalent = _movable
-            .Select(t => (t.PlayerColor, t.StepsTaken))
-            .Distinct()
-            .Count() == 1;
+        // If only one token (or a group of identical tokens, such as several in the yard) can move
+        // with any of the saved rolls, there is nothing to choose: play them in the saved order
+        var movableGroups = new HashSet<(string Color, int Steps)>();
 
-        if (oneRoll && allEquivalent)
+        foreach (int value in _pending.Distinct())
+            foreach (Token t in BuildMovable(value))
+                movableGroups.Add((t.PlayerColor, t.StepsTaken));
+
+        if (movableGroups.Count == 1 && _movable.Count > 0)
         {
             Token pick = _movable[_rng.RandiRange(0, _movable.Count - 1)];
 
@@ -797,7 +820,10 @@ public partial class GameManager : Node
         token.ZIndex = 0;
         if (partner != null) partner.ZIndex = 0;
 
-        if (partner != null)
+        bool pairMove = partner != null;
+        bool joinedPair = false;
+
+        if (pairMove)
         {
             // A pair splits when it reaches a star, a start square or the home lane
             if (pairBreaks) _rules.Unpair(token);
@@ -805,17 +831,15 @@ public partial class GameManager : Node
         else
         {
             // A single token that lands on a teammate's cell forms a pair with it
-            _rules.TryFormPair(token);
+            joinedPair = _rules.TryFormPair(token);
         }
 
-        // Landing on an unsafe cell sends every unprotected opposing token there back to its yard
-        List<Token> captured = _rules.FindCaptures(token);
-
-        if (partner != null)
-        {
-            foreach (Token extra in _rules.FindCaptures(partner))
-                if (!captured.Contains(extra)) captured.Add(extra);
-        }
+        // A single token landing on an unsafe cell sends every unprotected opposing token there
+        // back to its yard. A pair that moved captures opposing pairs only. A token that has just
+        // joined a teammate captures nothing. Stars and start squares are always safe.
+        List<Token> captured = joinedPair
+            ? new List<Token>()
+            : _rules.FindCaptures(token, pairMove);
 
         foreach (Token victim in captured)
             victim.StepsTaken = -1;

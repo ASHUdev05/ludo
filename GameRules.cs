@@ -10,7 +10,8 @@ using System.Linq;
 //  - A pair moves as one piece: both tokens move together by half the roll (rounded up).
 //  - A pair stays a pair until it reaches a star, a start square or the home lane, where it
 //    splits back into two free tokens. A pair never moves past such a cell.
-//  - A pair, and any token standing with a teammate, cannot be captured.
+//  - Single tokens cannot capture a pair, or a token standing with a teammate. Only another pair
+//    can capture a pair, by landing on it. A pair never captures single tokens.
 //  - Opponents cannot jump over a pair. They may stop on its cell (and move on from there).
 //  - Stars and start squares are shared safe cells and never hold pairs.
 public class GameRules
@@ -274,27 +275,46 @@ public class GameRules
         return count >= 2;
     }
 
-    // Opposing tokens sent home by this token's landing. Stars, start cells and home lanes are
-    // safe; teammates, yourself and anything standing in a pair are never captured.
-    public List<Token> FindCaptures(Token mover)
+    // Opposing tokens sent home by landing on a cell. Stars, start squares and home lanes are
+    // always safe. A single token captures only tokens that are not standing with a teammate;
+    // a pair (asPair) captures opposing pairs only.
+    private List<Token> CapturesAt(string moverColor, int cell, bool asPair)
     {
         var result = new List<Token>();
 
-        if (_board.IsSafe(mover.PlayerColor, mover.StepsTaken))
+        if (cell < 0 || _board.IsSafeIndex(cell))
             return result;
-
-        int cell = _board.GetPathIndex(mover.PlayerColor, mover.StepsTaken);
 
         foreach (Token other in _board.AllTokens)
         {
-            if (_config.SameTeam(mover.PlayerColor, other.PlayerColor)) continue;
+            if (_config.SameTeam(moverColor, other.PlayerColor)) continue;
             if (_board.GetPathIndex(other.PlayerColor, other.StepsTaken) != cell) continue;
-            if (IsProtected(other)) continue;
 
-            result.Add(other);
+            if (asPair)
+            {
+                if (other.PairedWith != null) result.Add(other);
+            }
+            else if (!IsProtected(other))
+            {
+                result.Add(other);
+            }
         }
 
         return result;
+    }
+
+    // Tokens sent home now that "mover" has landed. Pass asPair = true if it moved as part of a pair.
+    public List<Token> FindCaptures(Token mover, bool asPair)
+    {
+        int cell = _board.GetPathIndex(mover.PlayerColor, mover.StepsTaken);
+        return CapturesAt(mover.PlayerColor, cell, asPair);
+    }
+
+    // Tokens that would be sent home if "t" ended its move on toSteps (used by the bots)
+    public List<Token> PredictCaptures(Token t, int toSteps, bool asPair)
+    {
+        int cell = _board.GetPathIndex(t.PlayerColor, toSteps);
+        return CapturesAt(t.PlayerColor, cell, asPair);
     }
 
     // =====================================
