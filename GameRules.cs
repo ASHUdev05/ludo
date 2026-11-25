@@ -7,9 +7,11 @@ using System.Linq;
 // PAIRS (blockades)
 //  - Two tokens of the same team landing on one shared-track cell form a pair. In team games
 //    the two partners' tokens can pair with each other.
-//  - A pair moves as one piece: both tokens move together by half the roll (rounded up).
-//  - A pair stays a pair until it reaches a star, a start square or the home lane, where it
-//    splits back into two free tokens. A pair never moves past such a cell.
+//  - A pair moves as one piece: both tokens move together by half the roll. A pair is twice as
+//    heavy, so only even rolls can move it (2 moves 1 cell, 4 moves 2, 6 moves 3); an odd roll
+//    can't be halved and can't move a pair.
+//  - A pair stays a pair, and may pass over stars and start squares. It splits back into two free
+//    tokens only when it lands on a star or start square, or enters the home lane.
 //  - Single tokens cannot capture a pair, or a token standing with a teammate. Only another pair
 //    can capture a pair, by landing on it. A pair never captures single tokens.
 //  - Opponents cannot jump over a pair. They may stop on its cell (and move on from there).
@@ -71,11 +73,18 @@ public class GameRules
 
         if (t.PairedWith != null)
         {
-            // The pair moves together, so neither token may be blocked
+            // An odd roll can't be halved, so it can't move a pair
             int distance = PairDistance(t, dice);
+            if (distance <= 0) return false;
 
-            return !PathBlocked(t, t.StepsTaken + distance)
-                && !PathBlocked(t.PairedWith, t.PairedWith.StepsTaken + distance);
+            // Neither token may overshoot home (Supermatch just finishes at home instead)
+            if (!IsSupermatch
+                && (t.StepsTaken + distance > HomeSteps || t.PairedWith.StepsTaken + distance > HomeSteps))
+                return false;
+
+            // The pair moves together, so neither token may be blocked
+            return !PathBlocked(t, TargetSteps(t, dice))
+                && !PathBlocked(t.PairedWith, TargetSteps(t.PairedWith, dice));
         }
 
         // Can't overshoot home (Supermatch just finishes at home instead)
@@ -90,7 +99,10 @@ public class GameRules
         if (t.IsInYard) return 0;
 
         if (t.PairedWith != null)
-            return t.StepsTaken + PairDistance(t, dice);
+        {
+            int target = t.StepsTaken + PairDistance(t, dice);
+            return IsSupermatch ? Math.Min(HomeSteps, target) : target;
+        }
 
         return Math.Min(HomeSteps, t.StepsTaken + dice * Multiplier(t));
     }
@@ -99,42 +111,32 @@ public class GameRules
     // PAIRS
     // =====================================
 
-    // Cells until this token reaches the next star, start square or the home lane
-    private int StopDistance(Token t)
-    {
-        for (int k = 1; k <= 56; k++)
-        {
-            // IsSafe is also true once the token is in its home lane
-            if (_board.IsSafe(t.PlayerColor, t.StepsTaken + k))
-                return k;
-        }
-
-        return 1;
-    }
-
-    // Half of the roll, rounded up. A pair moves at the pace of its slower token.
+    // Half of the roll. A pair is twice as heavy, so it moves half as far; an odd total can't be
+    // halved, so it moves 0 (the pair can't move at all). A pair moves at the pace of its slower token.
     private int PairHalf(Token a, int dice)
     {
         int multiplier = Math.Min(Multiplier(a), Multiplier(a.PairedWith));
-        return Math.Max(1, (dice * multiplier + 1) / 2);
+        int total = dice * multiplier;
+
+        return total % 2 == 0 ? total / 2 : 0;
     }
 
-    private int PairStop(Token a)
-    {
-        return Math.Min(StopDistance(a), StopDistance(a.PairedWith));
-    }
-
-    // How many cells both tokens of a pair move for this roll (never past the next stop)
+    // How many cells both tokens of a pair move for this roll (0 if the roll is odd)
     public int PairDistance(Token a, int dice)
     {
-        return Math.Min(PairHalf(a, dice), PairStop(a));
+        return PairHalf(a, dice);
     }
 
-    // True if this roll takes the pair to a star, a start square or the home lane,
-    // where it splits
+    // True if this roll takes a token of the pair onto a star or start square, or into the home
+    // lane, where the pair splits. A pair may pass over stars and start squares without splitting.
     public bool PairBreaks(Token a, int dice)
     {
-        return PairHalf(a, dice) >= PairStop(a);
+        Token b = a.PairedWith;
+
+        if (PairHalf(a, dice) <= 0) return false;
+
+        return _board.IsSafe(a.PlayerColor, TargetSteps(a, dice))
+            || _board.IsSafe(b.PlayerColor, TargetSteps(b, dice));
     }
 
     public void Unpair(Token t)
