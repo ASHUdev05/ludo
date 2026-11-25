@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://1ijlrhgnwh1j"]
 
-[ext_resource type="Script" uid="uid://b30wd8vm7sr4l" path="res://Token.cs" id="1_s1uwx"]
+[ext_resource type="Script" uid="uid://b30wd8vm7sr4l" path="res://scripts/audio/ui/board/Token.cs" id="1_s1uwx"]
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_p7d1o"]
 radius = 24.0

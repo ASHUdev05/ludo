@@ -1,12 +1,12 @@
 [gd_scene format=3 uid="uid://cwbhm6j8o3r6m"]
 
-[ext_resource type="Script" uid="uid://gm5p7381c41i" path="res://BoardManager.cs" id="1_khfwm"]
-[ext_resource type="PackedScene" uid="uid://1ijlrhgnwh1j" path="res://Token.tscn" id="2_ohnv3"]
-[ext_resource type="Script" uid="uid://docptn4suun5k" path="res://GameManager.cs" id="3_r8ix8"]
+[ext_resource type="Script" uid="uid://gm5p7381c41i" path="res://scripts/audio/ui/board/BoardManager.cs" id="1_pnm0s"]
+[ext_resource type="PackedScene" uid="uid://1ijlrhgnwh1j" path="res://scenes/Token.tscn" id="2_tu677"]
+[ext_resource type="Script" uid="uid://docptn4suun5k" path="res://scripts/core/GameManager.cs" id="3_3ihve"]
 
 [node name="MainBoard" type="Node2D" unique_id=699935495]
-script = ExtResource("1_khfwm")
-TokenScene = ExtResource("2_ohnv3")
+script = ExtResource("1_pnm0s")
+TokenScene = ExtResource("2_tu677")
 
 [node name="BoardBackground" type="Sprite2D" parent="." unique_id=817245267]
 
@@ -19,4 +19,4 @@ TokenScene = ExtResource("2_ohnv3")
 [node name="Tokens" type="Node2D" parent="." unique_id=1793200558]
 
 [node name="GameManager" type="Node" parent="." unique_id=2078076325]
-script = ExtResource("3_r8ix8")
+script = ExtResource("3_3ihve")
