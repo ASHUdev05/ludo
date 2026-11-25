@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://cwbhm6j8o3r6m"]
 
-[ext_resource type="Script" uid="uid://gm5p7381c41i" path="res://scripts/audio/ui/board/BoardManager.cs" id="1_pnm0s"]
+[ext_resource type="Script" uid="uid://gm5p7381c41i" path="res://scripts/board/BoardManager.cs" id="1_pnm0s"]
 [ext_resource type="PackedScene" uid="uid://1ijlrhgnwh1j" path="res://scenes/Token.tscn" id="2_tu677"]
 [ext_resource type="Script" uid="uid://docptn4suun5k" path="res://scripts/core/GameManager.cs" id="3_3ihve"]
 
