@@ -135,6 +135,9 @@ public class BotBrain
         int loop = _board.MainPathPositions.Count;
         int cell = _board.GetPathIndex(color, steps);
 
+        // A cell holding a pair is safe from single tokens, like a star
+        if (!asPair && _rules.CellHoldsPair(cell)) return false;
+
         foreach (Token other in _board.AllTokens)
         {
             if (_config.SameTeam(color, other.PlayerColor)) continue;

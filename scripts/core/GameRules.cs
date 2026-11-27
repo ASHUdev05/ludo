@@ -12,9 +12,12 @@ using System.Linq;
 //    can't be halved and can't move a pair.
 //  - A pair stays a pair, and may pass over stars and start squares. It splits back into two free
 //    tokens only when it lands on a star or start square, or enters the home lane.
-//  - Single tokens cannot capture a pair, or a token standing with a teammate. Only another pair
-//    can capture a pair, by landing on it. A pair never captures single tokens.
-//  - Opponents cannot jump over a pair. They may stop on its cell (and move on from there).
+//  - A cell holding a pair behaves like a star for single tokens: nobody standing there can be
+//    captured by a single token (not the pair, a third token of its team, or an opponent that
+//    stopped there). Only another pair can capture a pair, by landing on it. A pair never
+//    captures single tokens.
+//  - Nobody can jump over a pair, not even the tokens of its own team. A token may stop on the
+//    pair's cell (and move on from there).
 //  - Stars and start squares are shared safe cells and never hold pairs.
 public class GameRules
 {
@@ -205,7 +208,8 @@ public class GameRules
         return color == "Red" || color == "Yellow" ? "Team1" : "Team2";
     }
 
-    // Does the shared-track cell hold a pair (or more) that stops a token of "moverColor"?
+    // Does the shared-track cell hold a pair (or more) that nobody may jump over?
+    // This applies to every token, including the pair's own team.
     public bool IsBlockedCell(string moverColor, int pathIndex)
     {
         if (pathIndex < 0 || _board.IsSafeIndex(pathIndex)) return false;
@@ -215,7 +219,6 @@ public class GameRules
         foreach (Token t in _board.AllTokens)
         {
             if (_board.GetPathIndex(t.PlayerColor, t.StepsTaken) != pathIndex) continue;
-            if (_config.SameTeam(moverColor, t.PlayerColor)) continue; // your own team never blocks you
 
             string team = TeamKey(t.PlayerColor);
             counts[team] = counts.GetValueOrDefault(team) + 1;
@@ -224,7 +227,7 @@ public class GameRules
         return counts.Values.Any(count => count >= 2);
     }
 
-    // True if the token would have to jump over an opposing pair on its way to targetSteps.
+    // True if the token would have to jump over a pair (its own team's included) on its way to targetSteps.
     // Landing exactly on the pair's cell is allowed, so the final cell is not checked.
     public bool PathBlocked(Token t, int targetSteps)
     {
@@ -277,6 +280,20 @@ public class GameRules
         return count >= 2;
     }
 
+    // True if a pair stands on this shared-track cell
+    public bool CellHoldsPair(int cell)
+    {
+        if (cell < 0) return false;
+
+        foreach (Token t in _board.AllTokens)
+        {
+            if (t.PairedWith != null && _board.GetPathIndex(t.PlayerColor, t.StepsTaken) == cell)
+                return true;
+        }
+
+        return false;
+    }
+
     // Opposing tokens sent home by landing on a cell. Stars, start squares and home lanes are
     // always safe. A single token captures only tokens that are not standing with a teammate;
     // a pair (asPair) captures opposing pairs only.
@@ -285,6 +302,10 @@ public class GameRules
         var result = new List<Token>();
 
         if (cell < 0 || _board.IsSafeIndex(cell))
+            return result;
+
+        // A cell holding a pair is safe from single tokens, like a star
+        if (!asPair && CellHoldsPair(cell))
             return result;
 
         foreach (Token other in _board.AllTokens)
